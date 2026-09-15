@@ -26,6 +26,11 @@ plain `fillText` here. That result is specific to software rasterisation —
 | 400×150 | 60,000 | 6,000 | 82.8 | 45.6 | **12.4** |
 | 600×200 | 120,000 | 9,000 | 181.6 | 89.7 | **18.8** |
 
+Run-to-run variance on a shared machine is real: a repeat run put the
+400x150 full repaint at 67.8ms rather than 82.8, and the dirty column at 10.0
+rather than 12.4. Read the ratios between the columns, not the absolute
+figures.
+
 Two conclusions the architecture follows from:
 
 1. **Repaint only cells whose (glyph, colour) changed.** A battlefield is
