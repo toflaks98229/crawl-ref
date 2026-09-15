@@ -1,0 +1,1183 @@
+<title>Ashfield Line</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* A committed single-theme page: this is a field headquarters terminal.
+     It paints its own ground, so it holds on either host theme. */
+  :root {
+    --ground:  #07090c;
+    --panel:   #0f1318;
+    --panel-2: #141a21;
+    --line:    #202932;
+    --line-lit:#31404e;
+    --ink:     #c6cfdb;
+    --dim:     #7b8797;
+    --faint:   #4a5564;
+
+    --us:      #4fe3d8;
+    --them:    #ff6b5e;
+    --warn:    #ffc14d;
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+  }
+
+  .app {
+    height: 100%;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding-inline: 12px;
+    padding-block: 10px 12px;
+    gap: 9px;
+    box-sizing: border-box;
+  }
+
+  /* ---------------- top: the battle line ---------------- */
+
+  .top {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 14px;
+  }
+  .side { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .side.them { align-items: flex-end; }
+  .side .who {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    display: flex; gap: 9px; align-items: baseline;
+  }
+  .side.us .who { color: var(--us); }
+  .side.them .who { color: var(--them); }
+  .side .who .n { color: var(--dim); font-family: var(--mono); font-size: 11px;
+                  letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .bar { height: 5px; background: #0b0f14; border: 1px solid var(--line); width: 100%; }
+  .bar i { display: block; height: 100%; transition: width .25s linear; }
+  .side.us .bar i { background: var(--us); }
+  .side.them .bar i { background: var(--them); margin-left: auto; }
+
+  .clock {
+    font-family: var(--cond); font-weight: 700;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--faint); white-space: nowrap; text-align: center;
+  }
+  .clock b { display: block; color: var(--ink); font-family: var(--mono);
+             font-size: 15px; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+
+  /* ---------------- middle: the field ---------------- */
+
+  .field {
+    position: relative;
+    background: #05070a;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    min-height: 0;
+    cursor: crosshair;
+  }
+  .field canvas { position: absolute; inset: 0; display: block; }
+  #overlay { pointer-events: none; }
+
+  .hint {
+    position: absolute; left: 10px; right: 10px; bottom: 7px;
+    font-size: 10.5px; color: var(--faint);
+    pointer-events: none; text-align: center;
+    text-shadow: 0 0 6px #05070a, 0 0 6px #05070a;
+  }
+  .hint kbd {
+    font: inherit; color: var(--us); background: #0d1519;
+    border: 1px solid var(--line); border-radius: 2px; padding: 0 4px;
+  }
+
+  .verdict {
+    position: absolute; inset: 0;
+    display: grid; place-content: center; gap: 12px; text-align: center;
+    background: rgba(5,7,10,.86);
+  }
+  .verdict[hidden] { display: none !important; }
+  .verdict h2 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: 34px; letter-spacing: -.01em; margin: 0;
+  }
+  .verdict p { margin: 0; color: var(--dim); max-width: 44ch; }
+
+  /* ---------------- bottom: the command bar ---------------- */
+
+  .bottom {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    align-items: stretch;
+  }
+  .roster {
+    display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px;
+    min-height: 62px;
+  }
+  .card {
+    flex: 0 0 auto; width: 108px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-top: 2px solid var(--line-lit);
+    padding: 5px 7px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 2px;
+    font-size: 11px;
+  }
+  .card.sel { border-color: var(--us); border-top-color: var(--us); background: #0c1719; }
+  .card.rout { border-top-color: var(--warn); }
+  .card.dead { opacity: .3; cursor: default; }
+  .card .nm { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+  .card .g { color: var(--us); font-weight: 600; }
+  .card .men { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .card .ty { color: var(--faint); font-size: 10px; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; }
+  .card .mor { height: 3px; background: #0b0f14; margin-top: 2px; }
+  .card .mor i { display: block; height: 100%; background: var(--us); }
+  .card.rout .mor i { background: var(--warn); }
+  .roster .none { color: var(--faint); font-size: 11px; align-self: center; }
+
+  .ctl {
+    display: grid; grid-template-columns: repeat(3, auto); gap: 6px;
+    align-content: start;
+  }
+  .ctl .wide { grid-column: 1 / -1; }
+  button {
+    font: inherit; font-size: 11px;
+    color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 5px 9px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { border-color: var(--line-lit); }
+  button[aria-pressed="true"] { border-color: var(--us); color: var(--us); background: #0c1719; }
+  button:focus-visible { outline: 2px solid var(--us); outline-offset: 1px; }
+  .readout {
+    grid-column: 1 / -1;
+    font-size: 10.5px; color: var(--faint);
+    font-variant-numeric: tabular-nums;
+    display: flex; gap: 12px; justify-content: space-between;
+  }
+  .readout b { color: var(--dim); font-weight: 400; }
+
+  @media (max-width: 720px) {
+    .bottom { grid-template-columns: 1fr; }
+    .hint { display: none; }
+  }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="side us">
+      <div class="who"><span>Ashfield levy</span><span class="n" id="us-n"></span></div>
+      <div class="bar"><i id="us-bar" style="width:100%"></i></div>
+    </div>
+    <div class="clock">Field time<b id="clock">0:00</b></div>
+    <div class="side them">
+      <div class="who"><span class="n" id="them-n"></span><span>Marchmen</span></div>
+      <div class="bar"><i id="them-bar" style="width:100%"></i></div>
+    </div>
+  </header>
+
+  <div class="field" id="field">
+    <canvas id="base"></canvas>
+    <canvas id="overlay"></canvas>
+    <div class="hint">
+      <kbd>drag</kbd> select &middot; <kbd>right-click</kbd> march &middot;
+      <kbd>right-drag</kbd> form a line and face it &middot;
+      <kbd>wheel</kbd> zoom &middot; <kbd>WASD</kbd> pan &middot;
+      <kbd>space</kbd> halt time
+    </div>
+    <div class="verdict" id="verdict" hidden>
+      <h2 id="verdict-h"></h2>
+      <p id="verdict-p"></p>
+      <div><button id="again">Fight it again</button></div>
+    </div>
+  </div>
+
+  <footer class="bottom">
+    <div class="roster" id="roster"></div>
+    <div class="ctl">
+      <button id="pause" aria-pressed="false">&#9208; Halt</button>
+      <button id="sp1" aria-pressed="true">1&times;</button>
+      <button id="sp4" aria-pressed="false">4&times;</button>
+      <button id="zout">Zoom &minus;</button>
+      <button id="zin">Zoom +</button>
+      <button id="all">Select all</button>
+      <div class="readout">
+        <span>zoom <b id="r-zoom"></b></span>
+        <span>cells <b id="r-cells"></b></span>
+        <span>repainted <b id="r-dirty"></b></span>
+        <span>men <b id="r-men"></b></span>
+        <span>frame <b id="r-ms"></b></span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ===========================================================================
+  // Cell geometry. Per CLAUDE.md the cell is a console character box, 1 wide by
+  // 2 tall -- never a square. Zoom changes how much WORLD a cell covers, not
+  // how many pixels it is: the glyph stays legible and the frame cost stays
+  // flat, which is what BENCH.md says the renderer needs.
+  // ===========================================================================
+  var CELL_W = 8, CELL_H = 16;
+  var ZOOMS = [3.0, 2.0, 1.2, 0.7, 0.4];   // world units per cell, x axis
+  var ZOOM_NAMES = ["army", "wing", "line", "company", "man"];
+
+  var WORLD_W = 360, WORLD_H = 180;
+  var SPACING_X = 1.0, SPACING_Y = 1.25;   // between files / between ranks
+
+  // ---- palette -------------------------------------------------------------
+  var PAL = [
+    "#05070a", // 0  void
+    "#1d2a1c", // 1  field, dark
+    "#27351f", // 2  field
+    "#33422a", // 3  field, lit
+    "#3d4a3a", // 4  hill
+    "#54614d", // 5  crest
+    "#1c3550", // 6  water
+    "#2b4f73", // 7  shallows
+    "#1e3320", // 8  wood
+    "#4a4033", // 9  road
+    "#4fe3d8", // 10 us
+    "#7ef2c4", // 11 us, light
+    "#2fa89f", // 12 us, spent
+    "#ff6b5e", // 13 them
+    "#ffae8f", // 14 them, light
+    "#b94b43", // 15 them, spent
+    "#ffc14d", // 16 routing
+    "#c6cfdb"  // 17 ink
+  ];
+  var GLYPHS = " .,'\"`:;*#@%^~=-+iIxXoOsShHvVwWnN|/\\_".split("");
+  var GI = {};
+  GLYPHS.forEach(function (g, i) { GI[g] = i; });
+  var RAMP = [GI[":"], GI[";"], GI["*"], GI["#"], GI["@"]];
+
+  // ---- unit types ----------------------------------------------------------
+  var TYPES = {
+    spear:  { name: "Spearmen",  g: "i", men: 150, files: 25, speed: 5.2,
+              atk: 1.00, def: 1.15, charge: 0.8, range: 0 },
+    sword:  { name: "Swordsmen", g: "X", men: 130, files: 22, speed: 5.6,
+              atk: 1.30, def: 1.00, charge: 1.0, range: 0 },
+    bow:    { name: "Archers",   g: "v", men: 100, files: 25, speed: 5.8,
+              atk: 0.42, def: 0.60, charge: 0.4, range: 42 },
+    horse:  { name: "Horsemen",  g: "H", men:  80, files: 16, speed: 11.0,
+              atk: 1.15, def: 0.95, charge: 2.6, range: 0 }
+  };
+  // rock-paper-scissors: attacker type vs defender type
+  var MATCH = {
+    spear: { horse: 1.85, sword: 0.75, spear: 1.0, bow: 1.4 },
+    sword: { spear: 1.55, horse: 0.85, sword: 1.0, bow: 1.7 },
+    horse: { bow: 2.30, sword: 1.20, horse: 1.0, spear: 0.45 },
+    bow:   { bow: 1.0, spear: 1.0, sword: 1.0, horse: 1.0 }
+  };
+
+  var ORDER = ["spear", "spear", "sword", "bow", "spear", "sword",
+               "bow", "horse", "spear", "sword", "bow", "horse"];
+
+  // ===========================================================================
+  // State
+  // ===========================================================================
+  var base = document.getElementById("base"), bctx = base.getContext("2d", { alpha: false });
+  var over = document.getElementById("overlay"), octx = over.getContext("2d");
+  var fieldEl = document.getElementById("field");
+
+  var cols = 0, rows = 0;
+  var buf = null, prev = null;          // packed glyph<<8 | colour
+  var terrain = null;                   // WORLD_W * WORLD_H, terrain code
+  var forceFull = true;
+
+  var cam = { x: WORLD_W / 2, y: WORLD_H / 2, z: 1 };
+  var units = [], selected = [], effects = [];
+  var t = 0, speed = 1, paused = false, over_ = null;
+  var drag = null, rdrag = null, mouse = { x: 0, y: 0, inside: false };
+  var keys = Object.create(null);
+  var stat = { ms: 0, dirty: 0 };
+
+  function wpcX() { return ZOOMS[cam.z]; }
+  // The cell is twice as tall as it is wide, so a cell must span twice as much
+  // world on y for the battlefield to keep its true proportions.
+  function wpcY() { return ZOOMS[cam.z] * 2; }
+
+  // ===========================================================================
+  // Terrain
+  // ===========================================================================
+  function hash(x, y, s) {
+    var n = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453;
+    return n - Math.floor(n);
+  }
+  function noise(x, y, s) {
+    var xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    return (hash(xi, yi, s) * (1 - u) + hash(xi + 1, yi, s) * u) * (1 - v)
+         + (hash(xi, yi + 1, s) * (1 - u) + hash(xi + 1, yi + 1, s) * u) * v;
+  }
+  function buildTerrain(seed) {
+    terrain = new Uint8Array(WORLD_W * WORLD_H);
+    for (var y = 0; y < WORLD_H; y++) for (var x = 0; x < WORLD_W; x++) {
+      var h = noise(x / 46, y / 46, seed) * 0.66 + noise(x / 17, y / 17, seed + 3) * 0.34;
+      var w = noise(x / 70, y / 70, seed + 9);
+      var code;
+      if (w > 0.72 && h < 0.5) code = 4;                      // water
+      else if (h > 0.70) code = 3;                            // crest
+      else if (h > 0.60) code = 2;                            // hill
+      else if (noise(x / 9, y / 9, seed + 17) > 0.76) code = 5; // wood
+      else code = h > 0.5 ? 1 : 0;                            // field
+      terrain[y * WORLD_W + x] = code;
+    }
+  }
+  // terrain code -> [glyph index, colour index]
+  var TERRAIN_LOOK = [
+    [GI['"'], 2], [GI[","], 3], [GI["^"], 4], [GI["^"], 5],
+    [GI["~"], 6], [GI["*"], 8]
+  ];
+  function terrainAt(x, y) {
+    if (x < 0 || y < 0 || x >= WORLD_W || y >= WORLD_H) return 255;
+    return terrain[(y | 0) * WORLD_W + (x | 0)];
+  }
+  function slowGround(u) {
+    var c = terrainAt(u.x, u.y);
+    return c === 4 ? 0.45 : c === 5 ? 0.7 : 1;
+  }
+
+  // ===========================================================================
+  // Units
+  // ===========================================================================
+  var nextId = 1;
+  function makeUnit(side, type, x, y, facing) {
+    var T = TYPES[type];
+    var u = {
+      id: nextId++, side: side, type: type, T: T,
+      x: x, y: y, facing: facing,
+      tx: x, ty: y, tf: facing, files: T.files,
+      men: T.men, max: T.men,
+      morale: 100, state: "idle", routTime: 0,
+      vx: 0, vy: 0, sp: 0, cool: 0, volley: 0,
+      engaged: null, chargeUsed: 0,
+      pos: new Float32Array(T.men * 2)
+    };
+    // soldiers start on their slots
+    for (var i = 0; i < T.men; i++) {
+      var p = slot(u, i);
+      u.pos[i * 2] = p[0]; u.pos[i * 2 + 1] = p[1];
+    }
+    return u;
+  }
+  var _s = [0, 0];
+  function slot(u, i) {
+    var ranks = Math.ceil(u.men / u.files) || 1;
+    var file = i % u.files, rank = (i / u.files) | 0;
+    var lx = (file - (u.files - 1) / 2) * SPACING_X;
+    var ly = (rank - (ranks - 1) / 2) * SPACING_Y;
+    var c = Math.cos(u.facing), s = Math.sin(u.facing);
+    // forward = (c, s); right = (-s, c); backward = (-c, -s)
+    _s[0] = u.x + (-s) * lx + (-c) * ly;
+    _s[1] = u.y + (c) * lx + (-s) * ly;
+    return _s;
+  }
+  function width(u) { return u.files * SPACING_X; }
+  function depth(u) { return Math.ceil(u.men / u.files) * SPACING_Y; }
+  function radius(u) { return Math.max(width(u), depth(u)) * 0.5; }
+
+  function deploy(seed) {
+    units = []; selected = []; effects = []; nextId = 1;
+    t = 0; over_ = null; aiClock = 3;
+    var usY = WORLD_H * 0.74, themY = WORLD_H * 0.26;
+    var n = ORDER.length;
+    for (var i = 0; i < n; i++) {
+      var fx = WORLD_W * (0.16 + 0.68 * (i + 0.5) / n);
+      var ty = ORDER[i];
+      // put the horse on the wings for both sides
+      units.push(makeUnit(0, ty, fx, usY + (ty === "bow" ? 9 : 0), -Math.PI / 2));
+      units.push(makeUnit(1, ORDER[(i + 4 + (seed | 0)) % n], WORLD_W - fx,
+                          themY - (ORDER[(i + 4) % n] === "bow" ? 9 : 0), Math.PI / 2));
+    }
+    cam.x = WORLD_W / 2; cam.y = WORLD_H / 2; cam.z = 1;
+    forceFull = true;
+  }
+
+  // ===========================================================================
+  // Simulation
+  // ===========================================================================
+  function angTo(a, b) {
+    var d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+  function dist(a, b) {
+    var dx = a.x - b.x, dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function nearestEnemy(u, maxD) {
+    var best = null, bd = maxD === undefined ? 1e9 : maxD;
+    for (var i = 0; i < units.length; i++) {
+      var v = units[i];
+      if (v.side === u.side || v.men <= 0) continue;
+      var d = dist(u, v);
+      if (d < bd) { bd = d; best = v; }
+    }
+    return best;
+  }
+
+  function step(dt) {
+    var i, u, v;
+
+    // --- movement ----------------------------------------------------------
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.men <= 0) continue;
+      u.cool -= dt; u.volley -= dt;
+
+      if (u.state === "routing") {
+        u.routTime += dt;
+        var away = nearestEnemy(u);
+        if (away) {
+          var ax = u.x - away.x, ay = u.y - away.y, al = Math.hypot(ax, ay) || 1;
+          u.tx = u.x + ax / al * 40; u.ty = u.y + ay / al * 40;
+          u.tf = Math.atan2(ay / al, ax / al);
+        }
+        u.morale = Math.min(38, u.morale + 3.4 * dt);
+        if (u.morale >= 36 && u.routTime > 9) { u.state = "idle"; u.routTime = 0; }
+        // off the map is out of the battle
+        if (u.x < -6 || u.x > WORLD_W + 6 || u.y < -6 || u.y > WORLD_H + 6) {
+          u.men = 0; u.state = "dead";
+          continue;
+        }
+      }
+
+      var dx = u.tx - u.x, dy = u.ty - u.y, dl = Math.hypot(dx, dy);
+      var moving = dl > 0.6 && u.state !== "fighting";
+      var sp = u.T.speed * slowGround(u) * (u.state === "routing" ? 1.5 : 1)
+             * (u.men / u.max * 0.4 + 0.6);
+      if (moving) {
+        var mv = Math.min(dl, sp * dt);
+        u.x += dx / dl * mv; u.y += dy / dl * mv;
+        u.sp = sp;
+        if (u.state !== "routing") { u.state = "moving"; u.tf = Math.atan2(dy, dx); }
+      } else {
+        u.sp = 0;
+        if (u.state === "moving") u.state = "idle";
+      }
+      u.x = Math.max(-8, Math.min(WORLD_W + 8, u.x));
+      u.y = Math.max(-8, Math.min(WORLD_H + 8, u.y));
+
+      var da = angTo(u.facing, u.tf);
+      var turn = 1.9 * dt * (u.state === "fighting" ? 0.45 : 1);
+      u.facing += Math.max(-turn, Math.min(turn, da));
+
+      // soldiers chase their slot, so the block bends while turning
+      var lag = Math.min(1, dt * 3.4);
+      for (var k = 0; k < u.men; k++) {
+        var p = slot(u, k);
+        var px = u.pos[k * 2], py = u.pos[k * 2 + 1];
+        u.pos[k * 2] = px + (p[0] - px) * lag;
+        u.pos[k * 2 + 1] = py + (p[1] - py) * lag;
+      }
+    }
+
+    // --- contact -----------------------------------------------------------
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.men <= 0 || u.state === "routing") continue;
+      var foe = null, fd = 1e9;
+      for (var j = 0; j < units.length; j++) {
+        v = units[j];
+        if (v.side === u.side || v.men <= 0 || v.state === "routing") continue;
+        var d = dist(u, v);
+        if (d < (radius(u) + radius(v)) * 0.92 && d < fd) { fd = d; foe = v; }
+      }
+      u.engaged = foe;
+      if (foe) { if (u.state !== "fighting") u.state = "fighting"; }
+      else if (u.state === "fighting") u.state = "idle";
+    }
+
+    // --- melee -------------------------------------------------------------
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.men <= 0 || !u.engaged || u.state !== "fighting") continue;
+      v = u.engaged;
+      if (v.men <= 0) continue;
+
+      // flanking: how far off v's front is the direction the blow comes from
+      var bear = Math.atan2(u.y - v.y, u.x - v.x);
+      var off = Math.abs(angTo(v.facing, bear));
+      var flank = off > 2.2 ? 1.9 : off > 1.1 ? 1.35 : 1.0;
+
+      var charge = 1;
+      if (u.chargeUsed <= 0 && u.sp > u.T.speed * 0.55) {
+        charge = 1 + u.T.charge;
+        u.chargeUsed = 6;
+        if (u.T.charge > 1.5) {
+          effects.push({ k: "ring", x: v.x, y: v.y, r0: 0, r: 7, life: 0.45, max: 0.45,
+                         c: u.side === 0 ? 11 : 14 });
+          v.morale -= 9;
+        }
+      }
+      u.chargeUsed -= dt;
+
+      var mult = (MATCH[u.type] && MATCH[u.type][v.type]) || 1;
+      var kill = 0.0085 * u.men * mult * flank * charge / Math.max(0.5, v.T.def) * dt;
+      v.men = Math.max(0, v.men - kill);
+      // kill already carries dt: morale is a fraction of the unit lost, so a
+      // unit breaks at roughly a third casualties rather than on a timer.
+      v.morale -= (kill / v.max) * 320;
+      if (flank > 1.3) v.morale -= 5.5 * dt;
+      if (v.men <= 0) { v.state = "dead"; v.men = 0; }
+    }
+
+    // --- archery -----------------------------------------------------------
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.men <= 0 || u.T.range <= 0 || u.state === "fighting"
+          || u.state === "routing" || u.volley > 0) continue;
+      var tgt = nearestEnemy(u, u.T.range);
+      if (!tgt || tgt.state === "routing") continue;
+      u.volley = 2.6;
+      effects.push({ k: "bolt", x0: u.x, y0: u.y, x1: tgt.x, y1: tgt.y,
+                     life: 0.5, max: 0.5, c: u.side === 0 ? 11 : 14 });
+      var hit = 0.030 * u.men * (u.men / u.max);
+      tgt.men = Math.max(0, tgt.men - hit);
+      tgt.morale -= 1.6;
+      if (tgt.men <= 0) { tgt.state = "dead"; tgt.men = 0; }
+    }
+
+    // --- morale ------------------------------------------------------------
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.men <= 0) continue;
+      // friends routing nearby is contagious
+      var scare = 0;
+      for (var m = 0; m < units.length; m++) {
+        var f = units[m];
+        if (f === u || f.side !== u.side || f.men <= 0) continue;
+        if (f.state === "routing" && dist(u, f) < 34) scare += 3.1;
+      }
+      u.morale -= scare * dt;
+      if (u.state !== "fighting" && u.state !== "routing")
+        u.morale = Math.min(100, u.morale + 4.2 * dt);
+      u.morale = Math.max(0, Math.min(100, u.morale));
+      if (u.morale <= 0 && u.state !== "routing") {
+        u.state = "routing"; u.routTime = 0;
+        effects.push({ k: "ring", x: u.x, y: u.y, r0: 0, r: 9, life: 0.7, max: 0.7, c: 16 });
+      }
+    }
+
+    // --- the enemy commander ------------------------------------------------
+    aiClock -= dt;
+    if (aiClock <= 0) {
+      aiClock = 2.5;
+      commandAI();
+    }
+
+    for (i = effects.length - 1; i >= 0; i--) {
+      effects[i].life -= dt;
+      if (effects[i].life <= 0) effects.splice(i, 1);
+    }
+
+    // --- resolution --------------------------------------------------------
+    var f0 = force(0), f1 = force(1);
+    if (f0 < 0.34 || f1 < 0.34) {
+      over_ = f0 >= f1 ? "win" : "loss";
+      paused = true;
+      showVerdict();
+    }
+  }
+
+  var aiClock = 3;
+  function commandAI() {
+    var mine = [], foes = [];
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (u.men <= 0) continue;
+      (u.side === 1 ? mine : foes).push(u);
+    }
+    if (!mine.length || !foes.length) return;
+
+    // the flank of the enemy line, for the horse to ride around
+    var minX = Infinity, maxX = -Infinity, avgY = 0;
+    foes.forEach(function (f) {
+      minX = Math.min(minX, f.x); maxX = Math.max(maxX, f.x); avgY += f.y;
+    });
+    avgY /= foes.length;
+
+    mine.forEach(function (u, i) {
+      if (u.state === "routing" || u.state === "fighting") return;
+      var tgt = null, bd = 1e9;
+      for (var j = 0; j < foes.length; j++) {
+        var d = dist(u, foes[j]);
+        if (d < bd) { bd = d; tgt = foes[j]; }
+      }
+      if (!tgt) return;
+
+      if (u.type === "bow") {
+        // stand off and shoot: hold at three quarters of bow range
+        var bx = tgt.x - u.x, by = tgt.y - u.y, bl = Math.hypot(bx, by) || 1;
+        var stand = u.T.range * 0.75;
+        u.tx = tgt.x - bx / bl * stand;
+        u.ty = tgt.y - by / bl * stand;
+        u.tf = Math.atan2(by, bx);
+      } else if (u.type === "horse") {
+        // ride around the shorter end of the line and come in behind it
+        var toLeft = (i % 2) === 0;
+        var ex = toLeft ? minX - 26 : maxX + 26;
+        u.tx = Math.max(4, Math.min(WORLD_W - 4, ex));
+        u.ty = avgY + (bd < 46 ? 16 : 0);
+        u.tf = Math.atan2(avgY - u.y, 0.001);
+      } else {
+        // the foot advances to contact
+        var ax = tgt.x - u.x, ay = tgt.y - u.y, al = Math.hypot(ax, ay) || 1;
+        var stop = (radius(u) + radius(tgt)) * 0.8;
+        u.tx = tgt.x - ax / al * stop;
+        u.ty = tgt.y - ay / al * stop;
+        u.tf = Math.atan2(ay, ax);
+      }
+      u.state = "moving";
+    });
+  }
+
+  function force(side) {
+    var have = 0, total = 0;
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (u.side !== side) continue;
+      total += u.max;
+      if (u.state !== "routing" && u.men > 0) have += u.men;
+    }
+    return total ? have / total : 0;
+  }
+  function headcount(side) {
+    var n = 0;
+    for (var i = 0; i < units.length; i++)
+      if (units[i].side === side) n += Math.round(units[i].men);
+    return n;
+  }
+
+  // ===========================================================================
+  // Renderer: build a cell buffer, then repaint only the cells that changed.
+  // ===========================================================================
+  function resize() {
+    var r = fieldEl.getBoundingClientRect();
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cols = Math.max(20, Math.floor(r.width / CELL_W));
+    rows = Math.max(10, Math.floor(r.height / CELL_H));
+    [base, over].forEach(function (c) {
+      c.width = Math.round(r.width * dpr);
+      c.height = Math.round(r.height * dpr);
+      c.style.width = r.width + "px";
+      c.style.height = r.height + "px";
+    });
+    bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bctx.textBaseline = "middle";
+    bctx.textAlign = "center";
+    bctx.font = Math.round(CELL_H * 0.76) + "px " +
+      getComputedStyle(document.body).fontFamily;
+    buf = new Int32Array(cols * rows);
+    prev = new Int32Array(cols * rows).fill(-1);
+    forceFull = true;
+  }
+
+  function camLeft() { return cam.x - cols * wpcX() / 2; }
+  function camTop() { return cam.y - rows * wpcY() / 2; }
+  function worldToCell(wx, wy) {
+    return [(wx - camLeft()) / wpcX(), (wy - camTop()) / wpcY()];
+  }
+  function cellToWorld(cx, cy) {
+    return [camLeft() + cx * wpcX(), camTop() + cy * wpcY()];
+  }
+  function pxToWorld(px, py) {
+    return cellToWorld(px / CELL_W, py / CELL_H);
+  }
+
+  var counts = null, owner = null;
+  function render() {
+    var t0 = performance.now();
+    var n = cols * rows;
+    if (!counts || counts.length !== n) {
+      counts = new Uint16Array(n); owner = new Int32Array(n);
+    } else { counts.fill(0); }
+
+    var wx0 = camLeft(), wy0 = camTop(), sx = wpcX(), sy = wpcY();
+
+    // terrain pass
+    for (var cy = 0; cy < rows; cy++) {
+      var wy = wy0 + (cy + 0.5) * sy;
+      for (var cx = 0; cx < cols; cx++) {
+        var wx = wx0 + (cx + 0.5) * sx;
+        var code = terrainAt(wx, wy);
+        var look = code === 255 ? null : TERRAIN_LOOK[code];
+        buf[cy * cols + cx] = look ? (look[0] << 8 | look[1]) : (0 << 8 | 0);
+      }
+    }
+
+    // soldier pass -- stamp every living man into his cell
+    var perCell = Math.max(1, (sx / SPACING_X) * (sy / SPACING_Y));
+    var individual = perCell < 1.6;
+    for (var ui = 0; ui < units.length; ui++) {
+      var u = units[ui];
+      if (u.men <= 0) continue;
+      var live = Math.round(u.men);
+      for (var k = 0; k < live; k++) {
+        var px = (u.pos[k * 2] - wx0) / sx | 0;
+        var py = (u.pos[k * 2 + 1] - wy0) / sy | 0;
+        if (px < 0 || py < 0 || px >= cols || py >= rows) continue;
+        var idx = py * cols + px;
+        counts[idx]++;
+        owner[idx] = ui;
+      }
+    }
+
+    for (var i = 0; i < n; i++) {
+      var c = counts[i];
+      if (!c) continue;
+      var u2 = units[owner[i]];
+      var col = u2.side === 0
+        ? (u2.state === "routing" ? 16 : u2.men / u2.max > 0.5 ? 10 : 12)
+        : (u2.state === "routing" ? 16 : u2.men / u2.max > 0.5 ? 13 : 15);
+      var g;
+      if (individual) g = GI[u2.T.g];
+      else {
+        var r = c / perCell;
+        g = RAMP[Math.min(4, Math.max(0, Math.round(r * 4.4)))];
+      }
+      buf[i] = g << 8 | col;
+    }
+
+    // effects drawn as glyph overlays, same as the engine's own
+    for (var e = 0; e < effects.length; e++) stampEffect(effects[e]);
+
+    // --- repaint ------------------------------------------------------------
+    var dirty = 0;
+    bctx.save();
+    for (var y2 = 0; y2 < rows; y2++) {
+      for (var x2 = 0; x2 < cols; x2++) {
+        var id = y2 * cols + x2, val = buf[id];
+        if (!forceFull && prev[id] === val) continue;
+        prev[id] = val;
+        dirty++;
+        bctx.fillStyle = PAL[0];
+        bctx.fillRect(x2 * CELL_W, y2 * CELL_H, CELL_W, CELL_H);
+        var gi = val >> 8;
+        if (gi) {
+          bctx.fillStyle = PAL[val & 255];
+          bctx.fillText(GLYPHS[gi], x2 * CELL_W + CELL_W / 2,
+                        y2 * CELL_H + CELL_H / 2);
+        }
+      }
+    }
+    bctx.restore();
+    forceFull = false;
+    stat.dirty = dirty;
+    stat.ms = stat.ms * 0.85 + (performance.now() - t0) * 0.15;
+  }
+
+  function put(cx, cy, g, c) {
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+    buf[(cy | 0) * cols + (cx | 0)] = g << 8 | c;
+  }
+  function stampEffect(e) {
+    var p;
+    if (e.k === "bolt") {
+      // bolt::draw -- one glyph per cell along the line
+      var a = worldToCell(e.x0, e.y0), b = worldToCell(e.x1, e.y1);
+      var steps = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1])));
+      var prog = 1 - e.life / e.max;
+      for (var i = 0; i <= steps * prog; i++)
+        put(a[0] + (b[0] - a[0]) * i / steps, a[1] + (b[1] - a[1]) * i / steps,
+            GI["'"], e.c);
+    } else if (e.k === "ring") {
+      // draw_ring_animation -- one ring per frame, expanding
+      var rr = e.r * (1 - e.life / e.max);
+      p = worldToCell(e.x, e.y);
+      var rx = rr / wpcX(), ry = rr / wpcY();
+      for (var a2 = 0; a2 < 28; a2++) {
+        var th = a2 / 28 * Math.PI * 2;
+        put(p[0] + Math.cos(th) * rx, p[1] + Math.sin(th) * ry, GI["*"], e.c);
+      }
+    }
+  }
+
+  // ===========================================================================
+  // Overlay: selection, orders, banners. Cleared and redrawn every frame.
+  // ===========================================================================
+  function renderOverlay() {
+    var w = over.width, h = over.height;
+    octx.clearRect(0, 0, w, h);
+    octx.font = "600 11px " + getComputedStyle(document.body).fontFamily;
+    octx.textBaseline = "middle";
+    octx.textAlign = "center";
+    octx.lineWidth = 1;
+
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (u.men <= 0) continue;
+      var c = worldToCell(u.x, u.y);
+      var px = c[0] * CELL_W, py = c[1] * CELL_H;
+      if (px < -60 || py < -60 || px > w + 60 || py > h + 60) continue;
+
+      var isSel = selected.indexOf(u) >= 0;
+      var col = u.state === "routing" ? PAL[16] : u.side === 0 ? PAL[10] : PAL[13];
+
+      // banner: only when a unit is too small to read as a block
+      if (cam.z <= 1 || isSel) {
+        octx.fillStyle = col;
+        octx.globalAlpha = isSel ? 1 : 0.72;
+        octx.fillText(u.T.g + Math.round(u.men), px, py - depth(u) / wpcY() * CELL_H / 2 - 9);
+        octx.globalAlpha = 1;
+      }
+
+      if (isSel) {
+        var hw = width(u) / wpcX() * CELL_W / 2, hh = depth(u) / wpcY() * CELL_H / 2;
+        octx.strokeStyle = PAL[11];
+        octx.setLineDash([3, 3]);
+        octx.strokeRect(px - hw - 2, py - hh - 2, hw * 2 + 4, hh * 2 + 4);
+        octx.setLineDash([]);
+        // facing pip
+        octx.beginPath();
+        octx.moveTo(px, py);
+        octx.lineTo(px + Math.cos(u.facing) * hh * 1.5,
+                    py + Math.sin(u.facing) * hh * 1.5);
+        octx.strokeStyle = PAL[11];
+        octx.stroke();
+        // marching order
+        if (u.state === "moving" || u.state === "routing") {
+          var tcell = worldToCell(u.tx, u.ty);
+          octx.beginPath();
+          octx.setLineDash([2, 5]);
+          octx.moveTo(px, py);
+          octx.lineTo(tcell[0] * CELL_W, tcell[1] * CELL_H);
+          octx.strokeStyle = u.state === "routing" ? PAL[16] : PAL[12];
+          octx.stroke();
+          octx.setLineDash([]);
+        }
+      }
+    }
+
+    if (drag) {
+      octx.strokeStyle = PAL[10];
+      octx.fillStyle = "rgba(79,227,216,.10)";
+      var x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
+      var dw = Math.abs(drag.x1 - drag.x0), dh = Math.abs(drag.y1 - drag.y0);
+      octx.fillRect(x, y, dw, dh);
+      octx.strokeRect(x + .5, y + .5, dw, dh);
+    }
+    if (rdrag) {
+      octx.strokeStyle = PAL[11];
+      octx.lineWidth = 2;
+      octx.beginPath();
+      octx.moveTo(rdrag.x0, rdrag.y0);
+      octx.lineTo(rdrag.x1, rdrag.y1);
+      octx.stroke();
+      // the perpendicular the line will face
+      var mx = (rdrag.x0 + rdrag.x1) / 2, my = (rdrag.y0 + rdrag.y1) / 2;
+      var a = Math.atan2(rdrag.y1 - rdrag.y0, rdrag.x1 - rdrag.x0) + Math.PI / 2;
+      octx.beginPath();
+      octx.moveTo(mx, my);
+      octx.lineTo(mx + Math.cos(a) * 26, my + Math.sin(a) * 26);
+      octx.strokeStyle = PAL[10];
+      octx.stroke();
+      octx.lineWidth = 1;
+    }
+  }
+
+  // ===========================================================================
+  // Orders
+  // ===========================================================================
+  function unitAtPx(px, py) {
+    var w = pxToWorld(px, py), best = null, bd = 1e9;
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (u.side !== 0 || u.men <= 0) continue;
+      var d = Math.hypot(u.x - w[0], u.y - w[1]);
+      if (d < radius(u) * 1.25 && d < bd) { bd = d; best = u; }
+    }
+    return best;
+  }
+
+  function orderTo(wx, wy, facing, files) {
+    if (!selected.length) return;
+    // spread the selection along the ordered line, left to right
+    var sel = selected.slice().sort(function (a, b) { return a.x - b.x; });
+    var span = 0;
+    sel.forEach(function (u) { span += width(u) + 3; });
+    var run = -span / 2;
+    var rx = -Math.sin(facing), ry = Math.cos(facing);
+    sel.forEach(function (u) {
+      var half = width(u) / 2;
+      if (files) u.files = Math.max(4, Math.min(u.men, files));
+      var off = sel.length > 1 ? run + half : 0;
+      u.tx = wx + rx * off;
+      u.ty = wy + ry * off;
+      u.tf = facing;
+      if (u.state !== "routing") u.state = "moving";
+      run += width(u) + 3;
+    });
+  }
+
+  // ===========================================================================
+  // Input
+  // ===========================================================================
+  function localPt(ev) {
+    var r = fieldEl.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  }
+
+  fieldEl.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+  fieldEl.addEventListener("pointerdown", function (e) {
+    if (over_) return;
+    var p = localPt(e);
+    fieldEl.setPointerCapture(e.pointerId);
+    if (e.button === 2) {
+      rdrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    } else if (e.button === 0) {
+      drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, add: e.shiftKey };
+    }
+  });
+
+  window.addEventListener("pointermove", function (e) {
+    var p = localPt(e);
+    mouse.x = p.x; mouse.y = p.y;
+    if (drag) { drag.x1 = p.x; drag.y1 = p.y; }
+    if (rdrag) { rdrag.x1 = p.x; rdrag.y1 = p.y; }
+  });
+
+  window.addEventListener("pointerup", function (e) {
+    var p = localPt(e);
+    if (drag) {
+      var box = Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0);
+      if (box < 6) {
+        var hit = unitAtPx(p.x, p.y);
+        if (!drag.add) selected = [];
+        if (hit && selected.indexOf(hit) < 0) selected.push(hit);
+      } else {
+        if (!drag.add) selected = [];
+        var x0 = Math.min(drag.x0, drag.x1), x1 = Math.max(drag.x0, drag.x1);
+        var y0 = Math.min(drag.y0, drag.y1), y1 = Math.max(drag.y0, drag.y1);
+        for (var i = 0; i < units.length; i++) {
+          var u = units[i];
+          if (u.side !== 0 || u.men <= 0) continue;
+          var c = worldToCell(u.x, u.y);
+          var px = c[0] * CELL_W, py = c[1] * CELL_H;
+          if (px >= x0 && px <= x1 && py >= y0 && py <= y1
+              && selected.indexOf(u) < 0) selected.push(u);
+        }
+      }
+      drag = null;
+      renderRoster();
+    }
+    if (rdrag) {
+      var len = Math.hypot(rdrag.x1 - rdrag.x0, rdrag.y1 - rdrag.y0);
+      if (len < 10) {
+        // simple march: face the way you are going
+        var w = pxToWorld(p.x, p.y);
+        var lead = selected[0];
+        var f = lead ? Math.atan2(w[1] - lead.y, w[0] - lead.x) : 0;
+        orderTo(w[0], w[1], f, 0);
+      } else {
+        // form a line along the drag and face perpendicular to it
+        var a = pxToWorld(rdrag.x0, rdrag.y0), b = pxToWorld(rdrag.x1, rdrag.y1);
+        var mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        var lineAng = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        var f2 = lineAng + Math.PI / 2;
+        // face away from where the selection currently stands
+        var lead2 = selected[0];
+        if (lead2) {
+          var toward = Math.atan2(my - lead2.y, mx - lead2.x);
+          if (Math.abs(angTo(f2, toward)) > Math.PI / 2) f2 += Math.PI;
+        }
+        var worldLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        orderTo(mx, my, f2, Math.round(worldLen / SPACING_X / Math.max(1, selected.length)));
+      }
+      rdrag = null;
+    }
+  });
+
+  fieldEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var p = localPt(e);
+    var before = pxToWorld(p.x, p.y);
+    var nz = cam.z + (e.deltaY > 0 ? -1 : 1);
+    nz = Math.max(0, Math.min(ZOOMS.length - 1, nz));
+    if (nz === cam.z) return;
+    cam.z = nz;
+    var after = pxToWorld(p.x, p.y);
+    cam.x += before[0] - after[0];
+    cam.y += before[1] - after[1];
+    clampCam();
+    forceFull = true;
+    syncReadout();
+  }, { passive: false });
+
+  function zoomBy(d) {
+    var nz = Math.max(0, Math.min(ZOOMS.length - 1, cam.z + d));
+    if (nz === cam.z) return;
+    cam.z = nz; clampCam(); forceFull = true; syncReadout();
+  }
+  function clampCam() {
+    var hw = cols * wpcX() / 2, hh = rows * wpcY() / 2;
+    cam.x = Math.max(Math.min(hw, WORLD_W / 2), Math.min(cam.x, Math.max(WORLD_W - hw, WORLD_W / 2)));
+    cam.y = Math.max(Math.min(hh, WORLD_H / 2), Math.min(cam.y, Math.max(WORLD_H - hh, WORLD_H / 2)));
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === " ") { e.preventDefault(); setPaused(!paused); }
+    else if (e.key === "Tab") { e.preventDefault(); selectAll(); }
+    else if (e.key === "Escape") { selected = []; renderRoster(); }
+    else if (e.key === "+" || e.key === "=") zoomBy(1);
+    else if (e.key === "-" || e.key === "_") zoomBy(-1);
+  });
+  document.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function panFromKeys(dt) {
+    var v = 46 * wpcX() / ZOOMS[2] * dt;
+    var mx = 0, my = 0;
+    if (keys.a || keys.arrowleft) mx -= 1;
+    if (keys.d || keys.arrowright) mx += 1;
+    if (keys.w || keys.arrowup) my -= 1;
+    if (keys.s || keys.arrowdown) my += 1;
+    if (mx || my) {
+      cam.x += mx * v; cam.y += my * v * 1.2;
+      clampCam(); forceFull = true;
+    }
+  }
+
+  function selectAll() {
+    selected = units.filter(function (u) { return u.side === 0 && u.men > 0; });
+    renderRoster();
+  }
+
+  // ===========================================================================
+  // Chrome
+  // ===========================================================================
+  var rosterEl = document.getElementById("roster");
+  function renderRoster() {
+    rosterEl.innerHTML = "";
+    var mine = units.filter(function (u) { return u.side === 0; });
+    if (!mine.length) return;
+    mine.forEach(function (u) {
+      var d = document.createElement("div");
+      var dead = u.men <= 0;
+      d.className = "card" + (selected.indexOf(u) >= 0 ? " sel" : "")
+        + (u.state === "routing" ? " rout" : "") + (dead ? " dead" : "");
+      d.innerHTML = "<span class='nm'><span class='g'>" + u.T.g + "</span>"
+        + "<span class='men'>" + Math.round(u.men) + "</span></span>"
+        + "<span class='ty'>" + (u.state === "routing" ? "routing" : u.T.name) + "</span>"
+        + "<span class='mor'><i style='width:" + Math.round(u.morale) + "%'></i></span>";
+      if (!dead) d.addEventListener("click", function (e) {
+        if (!e.shiftKey) selected = [];
+        if (selected.indexOf(u) < 0) selected.push(u);
+        renderRoster();
+      });
+      rosterEl.appendChild(d);
+    });
+  }
+
+  function syncReadout() {
+    document.getElementById("r-zoom").textContent =
+      ZOOM_NAMES[cam.z] + " (" + ZOOMS[cam.z].toFixed(1) + "/cell)";
+    document.getElementById("r-cells").textContent = (cols * rows).toLocaleString();
+  }
+
+  function syncTop() {
+    var f0 = force(0), f1 = force(1);
+    document.getElementById("us-bar").style.width = Math.round(f0 * 100) + "%";
+    document.getElementById("them-bar").style.width = Math.round(f1 * 100) + "%";
+    document.getElementById("us-n").textContent = headcount(0).toLocaleString() + " men";
+    document.getElementById("them-n").textContent = headcount(1).toLocaleString() + " men";
+    var s = Math.floor(t);
+    document.getElementById("clock").textContent =
+      Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    document.getElementById("r-dirty").textContent = stat.dirty.toLocaleString();
+    document.getElementById("r-men").textContent =
+      (headcount(0) + headcount(1)).toLocaleString();
+    document.getElementById("r-ms").textContent = stat.ms.toFixed(1) + "ms";
+  }
+
+  function setPaused(v) {
+    paused = v;
+    var b = document.getElementById("pause");
+    b.setAttribute("aria-pressed", String(v));
+    b.innerHTML = v ? "▶ Resume" : "⏸ Halt";
+  }
+  function setSpeed(v) {
+    speed = v;
+    document.getElementById("sp1").setAttribute("aria-pressed", String(v === 1));
+    document.getElementById("sp4").setAttribute("aria-pressed", String(v === 4));
+  }
+
+  function showVerdict() {
+    var el = document.getElementById("verdict");
+    var win = over_ === "win";
+    document.getElementById("verdict-h").textContent = win ? "The Marchmen break" : "The line is broken";
+    document.getElementById("verdict-h").style.color = win ? PAL[10] : PAL[13];
+    document.getElementById("verdict-p").textContent = win
+      ? "Their army has lost cohesion and is quitting the field. " +
+        headcount(0).toLocaleString() + " of yours still stand."
+      : "Your levy has lost cohesion. " + headcount(1).toLocaleString() +
+        " Marchmen hold the field.";
+    el.hidden = false;
+  }
+
+  document.getElementById("pause").addEventListener("click", function () { setPaused(!paused); });
+  document.getElementById("sp1").addEventListener("click", function () { setSpeed(1); });
+  document.getElementById("sp4").addEventListener("click", function () { setSpeed(4); });
+  document.getElementById("zin").addEventListener("click", function () { zoomBy(1); });
+  document.getElementById("zout").addEventListener("click", function () { zoomBy(-1); });
+  document.getElementById("all").addEventListener("click", selectAll);
+  document.getElementById("again").addEventListener("click", function () { start(); });
+
+  // ===========================================================================
+  // Loop
+  // ===========================================================================
+  var last = 0, acc = 0, uiAcc = 0;
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000 || 0);
+    last = now;
+    panFromKeys(dt);
+    if (!paused && !over_) {
+      acc += dt * speed;
+      while (acc > 1 / 30) { step(1 / 30); t += 1 / 30; acc -= 1 / 30; }
+    }
+    render();
+    renderOverlay();
+    uiAcc += dt;
+    if (uiAcc > 0.2) { uiAcc = 0; syncTop(); renderRoster(); }
+    requestAnimationFrame(frame);
+  }
+
+  function start() {
+    document.getElementById("verdict").hidden = true;
+    buildTerrain(Math.random() * 100);
+    deploy(Math.random() * 4);
+    setPaused(false);
+    setSpeed(1);
+    resize();
+    syncReadout();
+    syncTop();
+    renderRoster();
+  }
+
+  window.addEventListener("resize", function () { resize(); });
+  start();
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(frame); });
+})();
+</script>

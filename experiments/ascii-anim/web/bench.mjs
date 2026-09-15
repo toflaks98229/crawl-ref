@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const p = await b.newPage();
+p.on('pageerror', e => console.log('ERR', e.message));
+await p.goto('file://PATH_TO/bench.html');
+await p.waitForFunction(() => window.RESULTS, null, { timeout: 60000 });
+const r = await p.evaluate(() => window.RESULTS);
+console.log('ms per frame (lower is better), 60fps budget = 16.7ms\n');
+console.log(['scene','cells','moving','full','runs','dirty'].join('\t'));
+for (const x of r) console.log([x.label, x.cells, x.moving, x.full, x.runs, x.dirty].join('\t'));
+await b.close();

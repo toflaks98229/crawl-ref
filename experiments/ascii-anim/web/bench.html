@@ -1,0 +1,87 @@
+<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000">
+<canvas id="c"></canvas>
+<script>
+const GLYPHS="@#.iIoSJhxc*>+v^~,'".split("");
+const COLS=["#aaaaaa","#55ff55","#ff5555","#55ffff","#ffff55","#ff55ff","#5555ff","#ffffff","#555f6b","#aa5500"];
+
+// A battle map is mostly static terrain with a few thousand moving soldiers.
+// Model that: terrain drawn from a small palette, units scattered on top.
+function makeScene(w,h,unitCells){
+  const g=new Uint8Array(w*h), c=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++){
+    const t=Math.random();
+    g[i]= t<.75?2 : t<.9?16 : 1;          // . , #
+    c[i]= t<.75?8 : t<.9?9 : 0;            // terrain runs long in one colour
+  }
+  const cells=[];
+  for(let n=0;n<unitCells;n++){
+    const i=(Math.random()*w*h)|0;
+    g[i]=(Math.random()*8)|0; c[i]=1+((Math.random()*4)|0);
+    cells.push(i);
+  }
+  return {w,h,g,c,cells};
+}
+
+// --- D: run-length batching -- one fillText per run of same-colour cells ----
+function runs(ctx,S,cw,ch,font){
+  ctx.font=font; ctx.textBaseline="middle"; ctx.textAlign="left";
+  let buf="";
+  for(let y=0;y<S.h;y++){
+    let x=0;
+    while(x<S.w){
+      const i=y*S.w+x, col=S.c[i];
+      let x2=x; buf="";
+      while(x2<S.w && S.c[y*S.w+x2]===col){ buf+=GLYPHS[S.g[y*S.w+x2]]; x2++; }
+      ctx.fillStyle=COLS[col];
+      ctx.fillText(buf, x*cw, y*ch+ch/2);
+      x=x2;
+    }
+  }
+}
+// --- E: dirty cells only -- repaint just what changed since last frame ------
+function dirty(ctx,S,cw,ch,font,list){
+  ctx.font=font; ctx.textBaseline="middle"; ctx.textAlign="center";
+  for(let k=0;k<list.length;k++){
+    const i=list[k], x=i%S.w, y=(i/S.w)|0;
+    ctx.fillStyle="#000"; ctx.fillRect(x*cw,y*ch,cw,ch);
+    ctx.fillStyle=COLS[S.c[i]];
+    ctx.fillText(GLYPHS[S.g[i]], x*cw+cw/2, y*ch+ch/2);
+  }
+}
+function plain(ctx,S,cw,ch,font){
+  ctx.font=font; ctx.textBaseline="middle"; ctx.textAlign="center";
+  for(let y=0;y<S.h;y++)for(let x=0;x<S.w;x++){
+    const i=y*S.w+x;
+    ctx.fillStyle=COLS[S.c[i]];
+    ctx.fillText(GLYPHS[S.g[i]], x*cw+cw/2, y*ch+ch/2);
+  }
+}
+
+function bench(fn,ctx,S,cw,ch,font,list,clear){
+  fn(ctx,S,cw,ch,font,list);
+  const t0=performance.now(); let n=0;
+  while(performance.now()-t0<420){
+    if(clear){ctx.fillStyle="#000";ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);}
+    fn(ctx,S,cw,ch,font,list); n++;
+  }
+  return +((performance.now()-t0)/n).toFixed(2);
+}
+
+function run(w,h,cw,units,label){
+  const ch=cw*2, font=Math.round(ch*0.78)+"px 'IBM Plex Mono', monospace";
+  const c=document.getElementById("c");
+  c.width=Math.ceil(w*cw); c.height=Math.ceil(h*ch);
+  const ctx=c.getContext("2d",{alpha:false});
+  const S=makeScene(w,h,units);
+  return {label, cells:w*h, moving:units,
+    full: bench(plain,ctx,S,cw,ch,font,null,true),
+    runs: bench(runs,ctx,S,cw,ch,font,null,true),
+    dirty:bench(dirty,ctx,S,cw,ch,font,S.cells,false)};
+}
+window.RESULTS=[
+  run(160,60,8,1200,"mid 160x60"),
+  run(240,90,5,3000,"zoom-out 240x90"),
+  run(400,150,3,6000,"strategic 400x150"),
+  run(600,200,2,9000,"extreme 600x200"),
+];
+</script></body>
