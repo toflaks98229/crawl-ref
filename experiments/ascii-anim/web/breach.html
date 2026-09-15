@@ -26,7 +26,12 @@
     --c8:#555f6b; --c9:#5555ff; --c10:#55ff55; --c11:#55ffff;
     --c12:#ff5555; --c13:#ff55ff; --c14:#ffff55; --c15:#ffffff;
 
-    --cell: clamp(30px, 8.2vw, 46px);
+    /* Console character cell: the VGA text-mode 8x16 box, never a square.
+       See CLAUDE.md -- and note orb_animation's dx*dx*4/9 metric, which
+       exists for exactly this reason. */
+    --cell-w: clamp(23px, 5.6vw, 31px);
+    --cell-ratio: 2;
+    --cell-h: calc(var(--cell-w) * var(--cell-ratio));
     --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
     --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
   }
@@ -43,7 +48,7 @@
   }
 
   .wrap {
-    max-width: 1080px;
+    max-width: 940px;
     margin: 0 auto;
     padding-inline: 20px;
     padding-block: 28px 40px;
@@ -85,7 +90,7 @@
 
   .stage {
     display: grid;
-    grid-template-columns: min-content minmax(280px, 380px);
+    grid-template-columns: min-content minmax(300px, 1fr);
     gap: 20px;
     align-items: start;
     justify-content: start;
@@ -111,27 +116,38 @@
   }
   .board {
     display: grid;
-    grid-template-columns: repeat(8, var(--cell));
-    grid-auto-rows: var(--cell);
+    grid-template-columns: repeat(8, var(--cell-w));
+    grid-auto-rows: var(--cell-h);
     background: #05070a;
     border: 1px solid #05070a;
     touch-action: manipulation;
   }
   .cell {
-    display: grid;
-    place-items: center;
-    font-size: calc(var(--cell) * .62);
-    line-height: 1;
+    width: var(--cell-w);
+    height: var(--cell-h);
+    overflow: hidden;
     color: var(--c7);
     position: relative;
     user-select: none;
     background: transparent;
+    display: block;
+  }
+  /* Only the glyph is squeezed -- the cell's own background and borders keep
+     their true geometry. */
+  .cell > .g {
+    display: block;
+    width: 100%;
+    font-size: calc(var(--cell-h) * .74);
+    line-height: var(--cell-h);
+    text-align: center;
+    white-space: pre;
+    transform-origin: 50% 50%;
   }
   .cell.pick { cursor: pointer; }
   .cell.pick::after {
     content: "";
     position: absolute;
-    inset: 3px;
+    inset: 2px;
     border: 1px solid var(--accent);
     opacity: .5;
   }
@@ -398,6 +414,37 @@
   var W = 8, H = 8;
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // ---- one glyph, one cell (see cellgrid.js, CLAUDE.md) --------------------
+  // Console cells, but without cmd's East Asian Width problem: a wide glyph
+  // is squeezed onto the x axis rather than claiming a second column.
+  var CellGrid = (function () {
+    var mctx = document.createElement("canvas").getContext("2d");
+    var cache = new Map(), unit = 0, ready = false;
+    function useFont(sample) {
+      var cs = getComputedStyle(sample);
+      mctx.font = cs.fontSize + " " + cs.fontFamily;
+      unit = mctx.measureText("M").width || 1;
+      cache.clear();
+      ready = true;
+    }
+    function scaleFor(ch) {
+      if (!ready || !ch || ch === " ") return 1;
+      var hit = cache.get(ch);
+      if (hit !== undefined) return hit;
+      var w = mctx.measureText(ch).width;
+      var s = (w > unit * 1.02) ? unit / w : 1;
+      cache.set(ch, s);
+      return s;
+    }
+    function paint(span, ch) {
+      if (span.textContent !== ch) span.textContent = ch;
+      var s = scaleFor(ch);
+      var t = s === 1 ? "" : "scaleX(" + s.toFixed(4) + ")";
+      if (span.style.transform !== t) span.style.transform = t;
+    }
+    return { useFont: useFont, paint: paint };
+  })();
+
   // ---- arenas, in .des vault notation: x wall, . floor, > chasm -------------
   var ARENAS = [
     ["........",
@@ -451,13 +498,19 @@
   var boardEl = document.getElementById("board");
   var cells = [];
 
+  var glyphs = [];
   for (var i = 0; i < W * H; i++) {
     var d = document.createElement("div");
     d.className = "cell";
     d.dataset.i = i;
+    var g = document.createElement("span");
+    g.className = "g";
+    d.appendChild(g);
     boardEl.appendChild(d);
     cells.push(d);
+    glyphs.push(g);
   }
+  CellGrid.useFont(glyphs[0]);
 
   function key(x, y) { return x + "," + y; }
   function inBounds(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
@@ -532,8 +585,9 @@
     var picks = pickable();
 
     for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
-      var el = cells[y * W + x], gc = glyphFor(x, y), k = key(x, y);
-      el.textContent = gc.g;
+      var idx = y * W + x;
+      var el = cells[idx], gc = glyphFor(x, y), k = key(x, y);
+      CellGrid.paint(glyphs[idx], gc.g);
       el.style.color = "var(--c" + gc.c + ")";
       var t = threat.get(k) || 0;
       el.className = "cell"
@@ -1056,6 +1110,15 @@
     });
   } else {
     start();
+  }
+
+  // Advances measured against a fallback face are wrong, so measure again
+  // once IBM Plex Mono is actually in.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(function () {
+      CellGrid.useFont(glyphs[0]);
+      if (S) render();
+    });
   }
 })();
 </script>

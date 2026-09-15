@@ -1,0 +1,37 @@
+/*
+ * cellgrid.css -- the console character cell.
+ *
+ * Cells carry the VGA text-mode 1:2 aspect. The glyph span inside each cell is
+ * what cellgrid.js squeezes, so backgrounds and borders stay on the cell and
+ * are never distorted along with the character.
+ */
+
+.cellgrid {
+  --cell-w: clamp(22px, 5.2vw, 30px);
+  --cell-ratio: 2;                                  /* 1 wide, 2 tall */
+  --cell-h: calc(var(--cell-w) * var(--cell-ratio));
+  --cell-font: calc(var(--cell-h) * 0.78);
+
+  display: grid;
+  grid-auto-rows: var(--cell-h);
+  /* the caller sets grid-template-columns: repeat(N, var(--cell-w)) */
+}
+
+.cellgrid .cell {
+  width: var(--cell-w);
+  height: var(--cell-h);
+  overflow: hidden;
+  position: relative;
+  display: block;
+}
+
+.cellgrid .cell > .g {
+  display: block;
+  width: 100%;
+  font-size: var(--cell-font);
+  line-height: var(--cell-h);
+  text-align: center;
+  white-space: pre;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>cellgrid proof</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="cellgrid.css">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 28px 20px 48px;
+    background: #0a0c10; color: #c3ccd9;
+    font: 13px/1.5 "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 500; color: #fff; }
+  h2 { font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #4d5765; margin: 0 0 8px; }
+  p { margin: 0; color: #7d8899; max-width: 68ch; }
+  section { border: 1px solid #232b36; background: #11151b; padding: 14px; overflow-x: auto; }
+  .cellgrid { --cell-w: 26px; background: #05070a; width: max-content; }
+  .cell { color: #aaaaaa; }
+  .cell:nth-child(odd) { background: #0d1117; }
+  .cell.hl { color: #3ddbd9; background: #0e1a1c; }
+  pre { margin: 0; background: #05070a; padding: 0; font-size: 20px; line-height: 52px;
+        color: #aaa; letter-spacing: 0; }
+  .bad { color: #ff5555; }
+  .good { color: #3ddbd9; }
+  table { border-collapse: collapse; font-size: 12px; }
+  td, th { text-align: left; padding: 3px 14px 3px 0; }
+  th { color: #4d5765; font-weight: 500; }
+  td.n { font-variant-numeric: tabular-nums; color: #c3ccd9; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>One glyph, one cell</h1>
+  <p>
+    The same string in both treatments. A console gives CJK and emoji two
+    columns, so the grid drifts out of alignment; the cell grid squeezes each
+    wide glyph onto the x axis instead, and column 0 stays column 0.
+  </p>
+
+  <section>
+    <h2><span class="bad">cmd behaviour</span> &mdash; wide glyphs take two columns</h2>
+    <pre id="raw"></pre>
+  </section>
+
+  <section>
+    <h2><span class="good">cellgrid</span> &mdash; every glyph in one cell</h2>
+    <div class="cellgrid" id="grid"></div>
+  </section>
+
+  <section>
+    <h2>Measured squeeze</h2>
+    <table id="tbl">
+      <tr><th>glyph</th><th>advance</th><th>half-width unit</th><th>scaleX</th></tr>
+    </table>
+  </section>
+</div>
+
+<script src="cellgrid.js"></script>
+<script>
+(function () {
+  "use strict";
+  var ROWS = [
+    "@ # . > 던전 크롤 ASCII",
+    "S o J h 한글 漢字 かな",
+    "* ═ ╔ ╗ ▓ ± 🔥 → ←"
+  ];
+  var COLS = 24;
+
+  document.getElementById("raw").textContent = ROWS.join("\n");
+
+  var grid = document.getElementById("grid");
+  grid.style.gridTemplateColumns = "repeat(" + COLS + ", var(--cell-w))";
+  var spans = [];
+  for (var r = 0; r < ROWS.length; r++) {
+    var row = [];
+    for (var c = 0; c < COLS; c++) {
+      var cell = document.createElement("span");
+      cell.className = "cell";
+      var g = document.createElement("span");
+      g.className = "g";
+      cell.appendChild(g);
+      grid.appendChild(cell);
+      row.push(g);
+    }
+    spans.push(row);
+  }
+
+  function draw() {
+    CellGrid.useFont(spans[0][0]);
+    for (var r = 0; r < ROWS.length; r++) {
+      CellGrid.paintRow(spans[r], ROWS[r]);
+      Array.from(ROWS[r]).forEach(function (ch, i) {
+        if (i < COLS && CellGrid.scaleFor(ch) < 1) spans[r][i].parentNode.classList.add("hl");
+      });
+    }
+
+    var tbl = document.getElementById("tbl");
+    Array.from(tbl.querySelectorAll("tr.d")).forEach(function (n) { n.remove(); });
+    var probe = document.createElement("canvas").getContext("2d");
+    probe.font = CellGrid.useFont(spans[0][0]);
+    ["@", "한", "漢", "か", "═", "🔥"].forEach(function (ch) {
+      var tr = document.createElement("tr");
+      tr.className = "d";
+      var adv = probe.measureText(ch).width;
+      tr.innerHTML = "<td>" + ch + "</td><td class='n'>" + adv.toFixed(1) + "px</td>"
+        + "<td class='n'>" + CellGrid.unit.toFixed(1) + "px</td>"
+        + "<td class='n'>" + CellGrid.scaleFor(ch).toFixed(3) + "</td>";
+      tbl.appendChild(tr);
+    });
+  }
+
+  draw();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+})();
+</script>
+</body>
+</html>
