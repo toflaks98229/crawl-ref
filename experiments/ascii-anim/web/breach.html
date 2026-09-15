@@ -1,0 +1,1061 @@
+<title>Overlay Breach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* ------------------------------------------------------------------
+     Committed single-theme design: this page is a terminal. It paints its
+     own ground explicitly so it holds on either host theme.
+     ------------------------------------------------------------------ */
+  :root {
+    --ground:  #0a0c10;
+    --bezel:   #11151b;
+    --panel:   #161b22;
+    --line:    #232b36;
+    --line-lit:#33404f;
+    --ink:     #c3ccd9;
+    --dim:     #7d8899;
+    --faint:   #4d5765;
+    --accent:  #3ddbd9;
+    --danger:  #ff5555;
+    --warn:    #ffb454;
+
+    /* CGA 16, in the order of enum COLOURS (defines.h:202). */
+    --c0:#000000; --c1:#3b4cc0; --c2:#00aa00; --c3:#00aaaa;
+    --c4:#aa0000; --c5:#aa00aa; --c6:#aa5500; --c7:#aaaaaa;
+    --c8:#555f6b; --c9:#5555ff; --c10:#55ff55; --c11:#55ffff;
+    --c12:#ff5555; --c13:#ff55ff; --c14:#ffff55; --c15:#ffffff;
+
+    --cell: clamp(30px, 8.2vw, 46px);
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 28px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* ---------------- masthead ---------------- */
+
+  .masthead { display: flex; flex-direction: column; gap: 10px; }
+  .eyebrow {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: clamp(30px, 6vw, 46px);
+    line-height: 1;
+    letter-spacing: -.01em;
+    margin: 0;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  .thesis {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--dim);
+    font-size: 13.5px;
+  }
+  .thesis b { color: var(--ink); font-weight: 500; }
+
+  /* ---------------- layout ---------------- */
+
+  .stage {
+    display: grid;
+    grid-template-columns: min-content minmax(280px, 380px);
+    gap: 20px;
+    align-items: start;
+    justify-content: start;
+  }
+  .left { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  @media (max-width: 800px) {
+    .stage { grid-template-columns: 1fr; }
+  }
+
+  /* ---------------- board ---------------- */
+
+  .bezel {
+    background: var(--bezel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 14px;
+    box-shadow: inset 0 0 0 1px #05070a, inset 0 2px 22px rgba(0,0,0,.7);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: max-content;
+    max-width: 100%;
+  }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, var(--cell));
+    grid-auto-rows: var(--cell);
+    background: #05070a;
+    border: 1px solid #05070a;
+    touch-action: manipulation;
+  }
+  .cell {
+    display: grid;
+    place-items: center;
+    font-size: calc(var(--cell) * .62);
+    line-height: 1;
+    color: var(--c7);
+    position: relative;
+    user-select: none;
+    background: transparent;
+  }
+  .cell.pick { cursor: pointer; }
+  .cell.pick::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid var(--accent);
+    opacity: .5;
+  }
+  .cell.pick:hover::after, .cell.pick:focus-visible::after { opacity: 1; }
+  .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .cell.threat { background: rgba(255,85,85,.17); box-shadow: inset 0 0 0 1px rgba(255,85,85,.42); }
+  .cell.threat2 { background: rgba(255,85,85,.34); box-shadow: inset 0 0 0 1px rgba(255,85,85,.6); }
+  .cell.here { box-shadow: inset 0 0 0 1px var(--accent); }
+
+  .board.shake { animation: shake .09s steps(1) infinite; }
+  @keyframes shake {
+    0%   { transform: translate(0,0); }
+    25%  { transform: translate(-3px,2px); }
+    50%  { transform: translate(2px,-3px); }
+    75%  { transform: translate(3px,3px); }
+  }
+  .board.flash { background: #4a0f14; }
+
+  .statline {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .statline b { color: var(--ink); font-weight: 500; }
+  .hearts { color: var(--danger); letter-spacing: .12em; }
+  .hearts .gone { color: var(--faint); }
+
+  /* ---------------- right rail ---------------- */
+
+  .rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+  .mod {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .mod > h2 {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+
+  .prompt { margin: 0; font-size: 13px; color: var(--ink); min-height: 2.9em; }
+  .prompt em { color: var(--accent); font-style: normal; }
+
+  .acts { display: flex; flex-direction: column; gap: 6px; }
+  .act {
+    display: grid;
+    grid-template-columns: 1.6em 1fr auto;
+    align-items: baseline;
+    gap: 10px;
+    text-align: left;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--ink);
+    background: #10141a;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: 7px 10px;
+    cursor: pointer;
+  }
+  .act .key { color: var(--accent); font-weight: 600; }
+  .act .sub { color: var(--dim); font-size: 11px; }
+  .act:hover:not(:disabled) { border-color: var(--line-lit); background: #151b23; }
+  .act[aria-pressed="true"] { border-color: var(--accent); background: #0e1a1c; }
+  .act:disabled { opacity: .34; cursor: default; }
+  .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .go {
+    font: inherit;
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ground);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    padding: 9px;
+    cursor: pointer;
+  }
+  .go:hover { filter: brightness(1.12); }
+  .go:disabled { opacity: .3; cursor: default; }
+  .go:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .foes { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; list-style: none; }
+  .foe {
+    display: grid;
+    grid-template-columns: 1.4em 1fr auto;
+    gap: 10px;
+    align-items: baseline;
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px solid #1b222b;
+  }
+  .foe:last-child { border-bottom: 0; }
+  .foe .g { font-size: 15px; text-align: center; }
+  .foe .intent { color: var(--warn); }
+  .foe .hp { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .foes .empty { color: var(--faint); font-size: 12px; }
+
+  /* the readout: the detail only this subject has */
+  .readout { gap: 7px; }
+  .prim {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12.5px;
+  }
+  .prim .name { color: var(--accent); font-weight: 500; }
+  .prim .name.idle { color: var(--faint); }
+  .prim .src { color: var(--dim); font-size: 11px; }
+  .meter { height: 3px; background: #0b0f14; border: 1px solid #1b222b; }
+  .meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .08s linear; }
+  .cells { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- footer map ---------------- */
+
+  .map {
+    border-top: 1px solid var(--line);
+    padding-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .map h2 {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+  .map ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(212px, 1fr));
+    gap: 10px;
+  }
+  .map li {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--line-lit);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .map .verb { color: var(--ink); font-size: 12.5px; }
+  .map .from { color: var(--dim); font-size: 11px; }
+  .map .from code { color: var(--accent); font-size: 11px; }
+
+  .note { margin: 0; color: var(--faint); font-size: 11.5px; max-width: 70ch; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .board.shake { animation: none; }
+    .meter i { transition: none; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div class="eyebrow">Turn-based tactics · fully telegraphed</div>
+    <h1>Overlay Breach</h1>
+    <p class="thesis">
+      Every effect on this board is drawn by one of Crawl's seven ASCII animation
+      primitives &mdash; a glyph-overlay list plus a delay loop, nothing else.
+      Here the overlay is not decoration: <b>the red cells are next turn's damage</b>,
+      so reading and rearranging them is the whole game.
+    </p>
+  </header>
+
+  <div class="stage">
+    <div class="left">
+      <div class="bezel">
+        <div class="board" id="board" aria-label="Tactical grid"></div>
+        <div class="statline">
+          <span>WAVE <b id="wave">1</b>/3</span>
+          <span>TURN <b id="turn">1</b></span>
+          <span class="hearts" id="hp"></span>
+        </div>
+      </div>
+
+      <section class="mod readout">
+        <h2>Overlay buffer</h2>
+        <div class="prim">
+          <span class="name idle" id="prim-name">idle</span>
+          <span class="src" id="prim-src">view.cc:745</span>
+        </div>
+        <div class="meter"><i id="prim-meter"></i></div>
+        <div class="cells" id="prim-cells">0 glyph overlays queued</div>
+      </section>
+    </div>
+
+    <div class="rail">
+      <section class="mod">
+        <h2>Orders</h2>
+        <p class="prompt" id="prompt"></p>
+        <div class="acts">
+          <button class="act" id="a-move" data-mode="move">
+            <span class="key">1</span><span>Reposition<br><span class="sub">step up to 2 &mdash; never into a chasm</span></span><span class="sub" id="s-move"></span>
+          </button>
+          <button class="act" id="a-zap" data-mode="zap">
+            <span class="key">2</span><span>Zap<br><span class="sub">bolt, 1 damage + knock back 1</span></span><span class="sub" id="s-zap"></span>
+          </button>
+          <button class="act" id="a-blast" data-mode="blast">
+            <span class="key">3</span><span>Blast<br><span class="sub">radius 1, 1 damage, shoves outward</span></span><span class="sub" id="s-blast"></span>
+          </button>
+          <button class="act" id="a-pulse" data-mode="pulse">
+            <span class="key">4</span><span>Pulse<br><span class="sub">shoves every adjacent foe away</span></span><span class="sub" id="s-pulse"></span>
+          </button>
+        </div>
+        <button class="go" id="end">End turn &nbsp;&crarr;</button>
+      </section>
+
+      <section class="mod">
+        <h2>Enemy intent</h2>
+        <ul class="foes" id="foes"></ul>
+      </section>
+
+    </div>
+  </div>
+
+  <section class="map">
+    <h2>Which primitive draws what</h2>
+    <ol>
+      <li><span class="verb">Zap fires along a line</span><span class="from"><code>bolt::draw</code> &mdash; beam.cc:721</span></li>
+      <li><span class="verb">Blast and acid splash bloom outward</span><span class="from"><code>bolt::explode</code> radial sweep &mdash; beam.cc:6985</span></li>
+      <li><span class="verb">Pulse and each wave's arrival ring out</span><span class="from"><code>draw_ring_animation</code> &mdash; view.cc:787</span></li>
+      <li><span class="verb">A hit jolts the grid</span><span class="from"><code>shake_viewport_animation</code> &mdash; view.cc:448</span></li>
+      <li><span class="verb">Damage washes the screen red</span><span class="from"><code>flash_view_delay</code> &mdash; view.cc:249</span></li>
+      <li><span class="verb">Clearing a wave sweeps the board</span><span class="from"><code>orb_animation</code> &mdash; view.cc:519</span></li>
+      <li><span class="verb">Defeat dissolves it cell by cell</span><span class="from"><code>banish_animation</code> &mdash; view.cc:469</span></li>
+    </ol>
+    <p class="note">
+      Glyphs and colours are Crawl's own: the CGA palette from <code>defines.h:202</code>,
+      monster characters from <code>dat/mons/*.yaml</code>. Arenas are written in
+      <code>.des</code> vault notation.
+    </p>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var W = 8, H = 8;
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---- arenas, in .des vault notation: x wall, . floor, > chasm -------------
+  var ARENAS = [
+    ["........",
+     ".x....x.",
+     "...>....",
+     "..x..x..",
+     "..x..x..",
+     "....>...",
+     ".x....x.",
+     "........"],
+    ["..x..x..",
+     "........",
+     ".>....>.",
+     "..xxxx..",
+     "..xxxx..",
+     ".>....>.",
+     "........",
+     "..x..x.."],
+    ["...xx...",
+     ".>....>.",
+     "........",
+     "x..xx..x",
+     "x..xx..x",
+     "........",
+     ".>....>.",
+     "...xx..."]
+  ];
+
+  // ---- monsters, straight out of dat/mons/*.yaml ----------------------------
+  var KINDS = {
+    adder: { glyph: "S", colour: 10, hp: 1, name: "adder",
+             intent: "bites all four sides", shape: "cross" },
+    orc:   { glyph: "o", colour: 12, hp: 2, name: "orc warrior",
+             intent: "charges three ahead", shape: "line" },
+    blob:  { glyph: "J", colour: 10, hp: 3, name: "acid blob", slow: true,
+             intent: "splashes every neighbour", shape: "square" },
+    jackal:{ glyph: "h", colour: 6, hp: 1, fast: true, name: "jackal",
+             intent: "bites all four sides", shape: "cross" }
+  };
+
+  var WAVES = [
+    ["adder", "adder", "orc"],
+    ["orc", "orc", "jackal", "adder"],
+    ["blob", "orc", "adder", "jackal", "adder"]
+  ];
+
+  // ---- state ----------------------------------------------------------------
+  var S = null;
+  var busy = false;
+  var overlay = new Map();     // "x,y" -> {g, c}   == view.cc:745 glyph_overlays
+  var boardEl = document.getElementById("board");
+  var cells = [];
+
+  for (var i = 0; i < W * H; i++) {
+    var d = document.createElement("div");
+    d.className = "cell";
+    d.dataset.i = i;
+    boardEl.appendChild(d);
+    cells.push(d);
+  }
+
+  function key(x, y) { return x + "," + y; }
+  function inBounds(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
+  function terrain(x, y) { return inBounds(x, y) ? S.arena[y][x] : "x"; }
+  function wall(x, y) { return terrain(x, y) === "x"; }
+  function chasm(x, y) { return terrain(x, y) === ">"; }
+  function foeAt(x, y) {
+    return S.foes.filter(function (f) { return f.hp > 0 && f.x === x && f.y === y; })[0] || null;
+  }
+  function occupied(x, y) {
+    return wall(x, y) || !!foeAt(x, y) || (S.px === x && S.py === y);
+  }
+  function chebyshev(ax, ay, bx, by) {
+    return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+  }
+
+  // ---- telegraph: a pure function of position + facing ----------------------
+  // Push a foe and its threatened cells move with it. Kill it and they vanish.
+  function threatOf(f) {
+    var out = [], d;
+    if (f.shape === "cross") {
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(function (v) {
+        if (inBounds(f.x + v[0], f.y + v[1]) && !wall(f.x + v[0], f.y + v[1]))
+          out.push([f.x + v[0], f.y + v[1]]);
+      });
+    } else if (f.shape === "square") {
+      for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        if (inBounds(f.x + dx, f.y + dy) && !wall(f.x + dx, f.y + dy))
+          out.push([f.x + dx, f.y + dy]);
+      }
+    } else if (f.shape === "line") {
+      d = f.facing || [1, 0];
+      for (var n = 1; n <= 3; n++) {
+        var tx = f.x + d[0] * n, ty = f.y + d[1] * n;
+        if (!inBounds(tx, ty) || wall(tx, ty)) break;
+        out.push([tx, ty]);
+      }
+    }
+    return out;
+  }
+
+  function faceToward(f) {
+    var dx = S.px - f.x, dy = S.py - f.y;
+    f.facing = Math.abs(dx) >= Math.abs(dy)
+      ? [dx === 0 ? 1 : Math.sign(dx), 0]
+      : [0, Math.sign(dy)];
+  }
+
+  // ---- render ---------------------------------------------------------------
+  function glyphFor(x, y) {
+    var o = overlay.get(key(x, y));
+    if (o) return o;
+    var f = foeAt(x, y);
+    if (f) return { g: f.glyph, c: f.colour };
+    if (S.px === x && S.py === y) return { g: "@", c: 15 };
+    var t = terrain(x, y);
+    if (t === "x") return { g: "#", c: 8 };
+    if (t === ">") return { g: ">", c: 1 };
+    return { g: ".", c: 8 };
+  }
+
+  function render() {
+    var threat = new Map();
+    S.foes.forEach(function (f) {
+      if (f.hp <= 0) return;
+      threatOf(f).forEach(function (p) {
+        threat.set(key(p[0], p[1]), (threat.get(key(p[0], p[1])) || 0) + 1);
+      });
+    });
+
+    var picks = pickable();
+
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      var el = cells[y * W + x], gc = glyphFor(x, y), k = key(x, y);
+      el.textContent = gc.g;
+      el.style.color = "var(--c" + gc.c + ")";
+      var t = threat.get(k) || 0;
+      el.className = "cell"
+        + (t >= 2 ? " threat2" : t === 1 ? " threat" : "")
+        + (picks.has(k) ? " pick" : "")
+        + (S.px === x && S.py === y ? " here" : "");
+      if (picks.has(k)) {
+        el.tabIndex = 0;
+        el.setAttribute("role", "button");
+        el.setAttribute("aria-label", "target " + x + "," + y);
+      } else {
+        el.removeAttribute("tabindex");
+        el.removeAttribute("role");
+        el.removeAttribute("aria-label");
+      }
+    }
+    renderRail();
+  }
+
+  function renderRail() {
+    document.getElementById("wave").textContent = Math.min(S.wave + 1, WAVES.length);
+    document.getElementById("turn").textContent = S.turn;
+
+    var hp = "";
+    for (var i = 0; i < S.maxhp; i++)
+      hp += i < S.hp ? "♥ " : "<span class='gone'>♥</span> ";
+    document.getElementById("hp").innerHTML = hp.trim();
+
+    ["move", "zap", "blast", "pulse"].forEach(function (m) {
+      var btn = document.getElementById("a-" + m);
+      var spent = m === "move" ? S.moved : S.acted;
+      btn.disabled = busy || spent || S.over;
+      btn.setAttribute("aria-pressed", String(S.mode === m));
+      document.getElementById("s-" + m).textContent = spent ? "used" : "";
+    });
+    document.getElementById("end").disabled = busy || S.over;
+
+    var list = document.getElementById("foes");
+    list.innerHTML = "";
+    var alive = S.foes.filter(function (f) { return f.hp > 0; });
+    if (!alive.length) {
+      var li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = S.over ? "—" : "wave clear";
+      list.appendChild(li);
+    }
+    alive.forEach(function (f) {
+      var li = document.createElement("li");
+      li.className = "foe";
+      li.innerHTML = "<span class='g' style='color:var(--c" + f.colour + ")'>"
+        + f.glyph + "</span><span>" + f.name
+        + "<br><span class='intent'>" + f.intent + "</span></span>"
+        + "<span class='hp'>" + f.hp + " hp</span>";
+      list.appendChild(li);
+    });
+
+    document.getElementById("prompt").innerHTML = S.prompt;
+  }
+
+  // ---- the overlay-buffer readout ------------------------------------------
+  function readout(name, src, frac, count) {
+    var n = document.getElementById("prim-name");
+    n.textContent = name;
+    n.className = "name" + (name === "idle" ? " idle" : "");
+    document.getElementById("prim-src").textContent = src;
+    document.getElementById("prim-meter").style.width = Math.round(frac * 100) + "%";
+    document.getElementById("prim-cells").textContent =
+      count + (count === 1 ? " glyph overlay queued" : " glyph overlays queued");
+  }
+  function idleReadout() { readout("idle", "view.cc:745", 0, overlay.size); }
+
+  // ---- the three primitives: add overlay, wait, clear -----------------------
+  function sleep(ms) {
+    return new Promise(function (r) { setTimeout(r, reduced ? 0 : ms); });
+  }
+  function put(x, y, g, c) {
+    if (inBounds(x, y)) overlay.set(key(x, y), { g: g, c: c });
+  }
+  function clearOverlays() { overlay.clear(); }
+
+  // bolt::draw -- beam.cc:721. The trail is deliberately never cleaned up.
+  async function animBolt(x0, y0, dx, dy, range, colour) {
+    for (var n = 1; n <= range; n++) {
+      var x = x0 + dx * n, y = y0 + dy * n;
+      if (!inBounds(x, y) || wall(x, y)) break;
+      put(x, y, "*", colour);
+      readout("bolt::draw", "beam.cc:721", n / range, overlay.size);
+      render();
+      await sleep(26);
+    }
+    await sleep(60);
+    clearOverlays();
+    render();
+  }
+
+  // bolt::explode -- beam.cc:6985. One Chebyshev ring per frame, centre out.
+  async function animExplosion(cx, cy, radius, colour) {
+    for (var r = 0; r <= radius; r++) {
+      for (var y = cy - r; y <= cy + r; y++) for (var x = cx - r; x <= cx + r; x++) {
+        if (chebyshev(cx, cy, x, y) !== r || wall(x, y)) continue;
+        put(x, y, "#", colour);
+      }
+      readout("bolt::explode", "beam.cc:6985", (r + 1) / (radius + 1), overlay.size);
+      render();
+      await sleep(64);
+    }
+    await sleep(140);          // the engine's explode_delay * 3
+    clearOverlays();
+    render();
+  }
+
+  // draw_ring_animation -- view.cc:787.
+  async function animRing(cx, cy, radius, colour, alt) {
+    for (var r = 0; r <= radius; r++) {
+      clearOverlays();
+      for (var y = cy - r; y <= cy + r; y++) for (var x = cx - r; x <= cx + r; x++) {
+        if (chebyshev(cx, cy, x, y) !== r || wall(x, y)) continue;
+        put(x, y, "*", (alt != null && Math.random() < .5) ? alt : colour);
+      }
+      readout("draw_ring_animation", "view.cc:787", (r + 1) / (radius + 1), overlay.size);
+      render();
+      await sleep(52);
+    }
+    clearOverlays();
+    render();
+  }
+
+  // shake_viewport_animation -- view.cc:448, plus flash_view_delay -- view.cc:249
+  async function animHit() {
+    readout("shake_viewport + flash_view", "view.cc:448 / :249", 1, overlay.size);
+    boardEl.classList.add("shake", "flash");
+    await sleep(190);
+    boardEl.classList.remove("flash");
+    await sleep(110);
+    boardEl.classList.remove("shake");
+  }
+
+  // orb_animation -- view.cc:519. Elliptical metric: dx*dx*4/9 + dy*dy.
+  async function animOrb(cx, cy) {
+    for (var frame = 0; frame < 10; frame++) {
+      var rng = frame > 5 ? 10 - frame : frame;
+      var lo = rng * rng, hi = (rng + 2) * (rng + 2);
+      clearOverlays();
+      for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+        var ddx = x - cx, ddy = y - cy;
+        var dist = Math.floor(ddx * ddx * 4 / 9) + ddy * ddy;
+        if (dist >= lo && dist < hi) {
+          var g = glyphFor(x, y);
+          put(x, y, g.g, 5);
+        }
+      }
+      readout("orb_animation", "view.cc:519", (frame + 1) / 10, overlay.size);
+      render();
+      await sleep(3 * (6 - rng) * (6 - rng));
+    }
+    clearOverlays();
+    render();
+  }
+
+  // banish_animation -- view.cc:469. Cells wink out with rising probability,
+  // and the animation extends itself until nothing is left.
+  async function animBanish() {
+    var hidden = new Set(), frame = 0, remaining = true;
+    while (remaining && frame < 10) {
+      remaining = false;
+      clearOverlays();
+      for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+        var k = key(x, y);
+        if (hidden.has(k)) { put(x, y, " ", 0); continue; }
+        if (Math.floor(Math.random() * Math.max(1, 10 - frame)) === 0) {
+          hidden.add(k);
+          put(x, y, " ", 0);
+        } else remaining = true;
+      }
+      readout("banish_animation", "view.cc:469", (frame + 1) / 10, overlay.size);
+      render();
+      await sleep(70);
+      frame++;
+    }
+  }
+
+  // ---- rules ---------------------------------------------------------------
+  function shove(f, dx, dy) {
+    var tx = f.x + dx, ty = f.y + dy;
+    if (!inBounds(tx, ty) || wall(tx, ty) || occupied(tx, ty)) return false;
+    f.x = tx; f.y = ty;
+    if (chasm(tx, ty)) { f.hp = 0; f.fell = true; }
+    return true;
+  }
+
+  function hurt(f, n) {
+    f.hp -= n;
+    if (f.hp <= 0) f.hp = 0;
+  }
+
+  function pickable() {
+    var out = new Set();
+    if (busy || S.over || !S.mode) return out;
+    if (S.mode === "move") {
+      for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+        if (chebyshev(S.px, S.py, x, y) === 0) continue;
+        if (Math.abs(S.px - x) + Math.abs(S.py - y) > 2) continue;
+        if (wall(x, y) || chasm(x, y) || foeAt(x, y)) continue;
+        if (pathClear(x, y)) out.add(key(x, y));
+      }
+    } else if (S.mode === "zap") {
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(function (d) {
+        for (var n = 1; n <= 5; n++) {
+          var x = S.px + d[0] * n, y = S.py + d[1] * n;
+          if (!inBounds(x, y) || wall(x, y)) break;
+          out.add(key(x, y));
+        }
+      });
+    } else if (S.mode === "blast") {
+      for (var y2 = 0; y2 < H; y2++) for (var x2 = 0; x2 < W; x2++)
+        if (chebyshev(S.px, S.py, x2, y2) <= 2 && !wall(x2, y2)) out.add(key(x2, y2));
+    }
+    return out;
+  }
+
+  function pathClear(tx, ty) {
+    // orthogonal steps only, so check both L-shaped routes
+    var dx = Math.sign(tx - S.px), dy = Math.sign(ty - S.py);
+    if (dx && dy) {
+      var a = !occupied(S.px + dx, S.py) && !chasm(S.px + dx, S.py);
+      var b = !occupied(S.px, S.py + dy) && !chasm(S.px, S.py + dy);
+      return a || b;
+    }
+    for (var n = 1; n < Math.abs(tx - S.px) + Math.abs(ty - S.py); n++) {
+      var mx = S.px + dx * n, my = S.py + dy * n;
+      if (occupied(mx, my) || chasm(mx, my)) return false;
+    }
+    return true;
+  }
+
+  async function playerAct(x, y) {
+    if (busy || S.over || !S.mode) return;
+    if (!pickable().has(key(x, y))) return;
+    busy = true; render();
+
+    if (S.mode === "move") {
+      S.px = x; S.py = y;
+      S.moved = true;
+      S.mode = null;
+      S.prompt = "Moved. Spend an action, or <em>end the turn</em>.";
+    } else if (S.mode === "zap") {
+      var dx = Math.sign(x - S.px), dy = Math.sign(y - S.py);
+      await animBolt(S.px, S.py, dx, dy, 5, 11);
+      for (var n = 1; n <= 5; n++) {
+        var tx = S.px + dx * n, ty = S.py + dy * n;
+        if (!inBounds(tx, ty) || wall(tx, ty)) break;
+        var f = foeAt(tx, ty);
+        if (f) { hurt(f, 1); shove(f, dx, dy); break; }
+      }
+      S.acted = true; S.mode = null;
+      S.prompt = "Bolt spent. <em>End the turn</em> when the board reads safe.";
+    } else if (S.mode === "blast") {
+      await animExplosion(x, y, 1, 12);
+      S.foes.forEach(function (f) {
+        if (f.hp > 0 && chebyshev(x, y, f.x, f.y) <= 1) {
+          hurt(f, 1);
+          if (f.hp > 0 && !(f.x === x && f.y === y))
+            shove(f, Math.sign(f.x - x), Math.sign(f.y - y));
+        }
+      });
+      S.acted = true; S.mode = null;
+      S.prompt = "Blast spent. <em>End the turn</em> when the board reads safe.";
+    }
+    cleanup();
+    busy = false;
+    render();
+  }
+
+  async function doPulse() {
+    if (busy || S.over || S.acted) return;
+    busy = true; S.mode = null; render();
+    await animRing(S.px, S.py, 1, 11, 9);
+    S.foes.forEach(function (f) {
+      if (f.hp > 0 && chebyshev(S.px, S.py, f.x, f.y) === 1)
+        shove(f, Math.sign(f.x - S.px), Math.sign(f.y - S.py));
+    });
+    S.acted = true;
+    S.prompt = "Pulse spent. <em>End the turn</em> when the board reads safe.";
+    cleanup();
+    busy = false;
+    render();
+  }
+
+  function cleanup() {
+    S.foes = S.foes.filter(function (f) { return f.hp > 0; });
+  }
+
+  // ---- turn resolution ------------------------------------------------------
+  async function endTurn() {
+    if (busy || S.over) return;
+    busy = true; S.mode = null; render();
+
+    // 1. every surviving foe delivers the attack it telegraphed, from wherever
+    //    it now stands. Foes caught in another foe's attack take the damage.
+    var casualties = [];
+    for (var i = 0; i < S.foes.length; i++) {
+      var f = S.foes[i];
+      if (f.hp <= 0) continue;
+      var cellsHit = threatOf(f);
+      if (!cellsHit.length) continue;
+
+      if (f.shape === "line") await animBolt(f.x, f.y, f.facing[0], f.facing[1], 3, 12);
+      else if (f.shape === "square") await animExplosion(f.x, f.y, 1, 10);
+      else await animRing(f.x, f.y, 1, 12);
+
+      var hitPlayer = false;
+      cellsHit.forEach(function (p) {
+        if (p[0] === S.px && p[1] === S.py) hitPlayer = true;
+        var v = foeAt(p[0], p[1]);
+        if (v && v !== f) { hurt(v, 1); casualties.push(v); }
+      });
+      if (hitPlayer) {
+        S.hp--;
+        await animHit();
+      }
+    }
+    cleanup();
+    render();
+
+    if (S.hp <= 0) { await lose(); return; }
+
+    if (!S.foes.length) {
+      await nextWave();
+      return;
+    }
+
+    // 2. survivors close in
+    S.foes.forEach(function (f) {
+      if (f.slow && S.turn % 2 === 0) return;
+      var steps = f.fast ? 2 : 1;
+      for (var s = 0; s < steps; s++) step(f);
+    });
+
+    // 3. and telegraph again
+    S.foes.forEach(faceToward);
+
+    S.turn++;
+    S.moved = false; S.acted = false;
+    S.prompt = "Red cells are next turn's damage. <em>Move, or move them.</em>";
+    busy = false;
+    render();
+  }
+
+  function step(f) {
+    var dx = S.px - f.x, dy = S.py - f.y;
+    if (Math.abs(dx) + Math.abs(dy) <= 1) return;   // already adjacent
+    var tries = Math.abs(dx) >= Math.abs(dy)
+      ? [[Math.sign(dx), 0], [0, Math.sign(dy)]]
+      : [[0, Math.sign(dy)], [Math.sign(dx), 0]];
+    for (var i = 0; i < tries.length; i++) {
+      var t = tries[i];
+      if (!t[0] && !t[1]) continue;
+      var tx = f.x + t[0], ty = f.y + t[1];
+      if (!inBounds(tx, ty) || wall(tx, ty) || chasm(tx, ty) || occupied(tx, ty)) continue;
+      f.x = tx; f.y = ty;
+      return;
+    }
+  }
+
+  // ---- waves ----------------------------------------------------------------
+  function spawnWave() {
+    var roster = WAVES[S.wave];
+    var spots = [];
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      if (wall(x, y) || chasm(x, y)) continue;
+      if (chebyshev(x, y, S.px, S.py) < 3) continue;
+      spots.push([x, y]);
+    }
+    for (var i = spots.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = spots[i]; spots[i] = spots[j]; spots[j] = t;
+    }
+    S.foes = roster.map(function (name, i) {
+      var k = KINDS[name], p = spots[i] || [0, 0];
+      return {
+        x: p[0], y: p[1], hp: k.hp, glyph: k.glyph, colour: k.colour,
+        name: k.name, intent: k.intent, shape: k.shape,
+        slow: !!k.slow, fast: !!k.fast, facing: [1, 0]
+      };
+    });
+    S.foes.forEach(faceToward);
+  }
+
+  async function nextWave() {
+    S.wave++;
+    if (S.wave >= WAVES.length) { await win(); return; }
+    S.prompt = "Wave " + (S.wave + 1) + " breaching.";
+    render();
+    await animOrb(S.px, S.py);
+    S.arena = ARENAS[S.wave];
+    if (wall(S.px, S.py) || chasm(S.px, S.py)) {
+      outer:
+      for (var r = 1; r < W; r++)
+        for (var y = S.py - r; y <= S.py + r; y++)
+          for (var x = S.px - r; x <= S.px + r; x++)
+            if (inBounds(x, y) && !wall(x, y) && !chasm(x, y)) {
+              S.px = x; S.py = y; break outer;
+            }
+    }
+    spawnWave();
+    await animRing(S.px, S.py, 3, 11, 9);
+    S.turn++;
+    S.moved = false; S.acted = false;
+    S.prompt = "Wave " + (S.wave + 1) + ". <em>Read the red before you move.</em>";
+    busy = false;
+    idleReadout();
+    render();
+  }
+
+  async function win() {
+    S.over = true;
+    S.prompt = "<em>All three waves broken.</em> Nothing on this board was drawn "
+      + "by anything but the seven primitives.";
+    render();
+    await animOrb(S.px, S.py);
+    await animOrb(S.px, S.py);
+    busy = false;
+    idleReadout();
+    showRestart("Play again");
+    render();
+  }
+
+  async function lose() {
+    S.over = true;
+    S.prompt = "<em>Overrun on wave " + (S.wave + 1) + ".</em> The board dissolves.";
+    render();
+    await animBanish();
+    busy = false;
+    idleReadout();
+    showRestart("Try again");
+    render();
+  }
+
+  function showRestart(label) {
+    var btn = document.getElementById("end");
+    btn.textContent = label;
+    btn.disabled = false;
+    btn.dataset.restart = "1";
+  }
+
+  // ---- input ----------------------------------------------------------------
+  boardEl.addEventListener("click", function (e) {
+    var el = e.target.closest(".cell");
+    if (!el) return;
+    var i = +el.dataset.i;
+    playerAct(i % W, Math.floor(i / W));
+  });
+  boardEl.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var el = e.target.closest(".cell");
+    if (!el || !el.hasAttribute("role")) return;
+    e.preventDefault();
+    var i = +el.dataset.i;
+    playerAct(i % W, Math.floor(i / W));
+  });
+
+  document.querySelectorAll(".act").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var m = btn.dataset.mode;
+      if (m === "pulse") { doPulse(); return; }
+      S.mode = S.mode === m ? null : m;
+      S.prompt = S.mode === "move"
+          ? "Pick a square within two orthogonal steps."
+        : S.mode === "zap"
+          ? "Pick a direction. The bolt hits the first foe and knocks it back one."
+        : S.mode === "blast"
+          ? "Pick a centre within two squares. Everything around it is shoved outward."
+        : "Red cells are next turn's damage. <em>Move, or move them.</em>";
+      render();
+    });
+  });
+
+  document.getElementById("end").addEventListener("click", function (e) {
+    if (e.currentTarget.dataset.restart) { start(); return; }
+    endTurn();
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.target.closest("input, textarea")) return;
+    var map = { "1": "a-move", "2": "a-zap", "3": "a-blast", "4": "a-pulse" };
+    if (map[e.key]) { e.preventDefault(); document.getElementById(map[e.key]).click(); }
+    else if (e.key === "Enter" && !e.target.closest(".cell, .act")) {
+      e.preventDefault();
+      document.getElementById("end").click();
+    } else if (e.key === "Escape" && S && S.mode) {
+      S.mode = null; render();
+    }
+  });
+
+  // ---- boot -----------------------------------------------------------------
+  function start() {
+    var btn = document.getElementById("end");
+    btn.innerHTML = "End turn &nbsp;&crarr;";
+    delete btn.dataset.restart;
+
+    S = {
+      arena: ARENAS[0], wave: 0, turn: 1,
+      px: 3, py: 3, hp: 3, maxhp: 3,
+      foes: [], mode: null, moved: false, acted: false, over: false,
+      prompt: "Red cells are next turn's damage. <em>Move, or move them.</em>"
+    };
+    busy = false;
+    clearOverlays();
+    spawnWave();
+    idleReadout();
+    render();
+  }
+
+  // Carry the game across a republish for anyone already playing.
+  if (window.claude && window.claude.hot) {
+    window.claude.hot.snapshot(function () { return { S: S }; });
+    window.claude.hot.ready(function (data) {
+      start();
+      if (data && data.S) { S = data.S; busy = false; render(); }
+    });
+  } else {
+    start();
+  }
+})();
+</script>
