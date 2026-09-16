@@ -110,8 +110,10 @@
 
   .rail {
     grid-area: rail;
-    display: flex; flex-direction: column; gap: 9px; min-height: 0;
+    display: flex; flex-direction: column; gap: 9px;
+    min-height: 0; overflow-y: auto;
   }
+  .rail .mod { flex: 0 0 auto; }
   .mod {
     background: var(--panel); border: 1px solid var(--line);
     padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
@@ -129,7 +131,7 @@
   .hpbar.low i { background: var(--danger); }
 
   /* the ledger: Crawl's energy system, visible */
-  .ledger { flex: 1; min-height: 0; overflow-y: auto; gap: 4px; }
+  .ledger { flex: 1 1 auto; min-height: 118px; overflow-y: auto; gap: 4px; }
   .act {
     display: grid; grid-template-columns: 1.2em 1fr auto; gap: 7px;
     align-items: center; font-size: 11.5px;
@@ -154,6 +156,21 @@
   button:hover { border-color: var(--line-lit); }
   button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .rack { display: flex; flex-direction: column; gap: 3px; }
+  .wp {
+    display: grid; grid-template-columns: 1.1em 1fr auto; gap: 7px;
+    align-items: baseline; text-align: left;
+    font: inherit; font-size: 11.5px; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 2px; padding: 4px 7px; cursor: pointer;
+  }
+  .wp .k { color: var(--accent); font-weight: 600; }
+  .wp .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wp .d { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 10.5px; }
+  .wp .why { grid-column: 2 / -1; color: var(--faint); font-size: 10px; }
+  .wp[aria-pressed="true"] { border-color: var(--accent); background: #10201f; }
+  .wp[aria-pressed="true"] .n { color: var(--accent); }
+
   .keyhelp { font-size: 10.5px; color: var(--faint); }
   .keyhelp b { color: var(--dim); font-weight: 400; }
 
@@ -172,7 +189,8 @@
       Stone Soup's rules, with the turn scheduler taken out. Monsters already
       gain <b>speed &times; time / 10</b> energy and act at <b>80</b> &mdash;
       the turn was only ever a way to advance that clock.
-      Here the wall clock advances it instead.
+      Here the wall clock advances it instead &mdash; and an axe still cleaves
+      every foe it reaches, one full attack roll each, in a single swing.
     </p>
     <span class="spacer"></span>
   </header>
@@ -208,6 +226,11 @@
     </section>
 
     <section class="mod">
+      <h2>Weapon</h2>
+      <div class="rack" id="rack"></div>
+    </section>
+
+    <section class="mod">
       <h2>Clock rate</h2>
       <div class="ctl">
         <button id="r10" aria-pressed="false">10 aut/s</button>
@@ -215,9 +238,10 @@
         <button id="r40" aria-pressed="false">40 aut/s</button>
       </div>
       <p class="keyhelp">
-        <b>WASD</b> or arrows to walk, hold to keep walking. Walk into something
-        to hit it. <b>.</b> holds ground, <b>&gt;</b> takes the stairs,
-        <b>R</b> starts over.
+        <b>WASD</b> or arrows to walk, hold to keep walking. Walk into
+        something to hit it, or hold <b>F</b> to keep swinging where you stand.
+        <b>1</b>&ndash;<b>4</b> change weapon, <b>.</b> holds ground,
+        <b>&gt;</b> takes the stairs, <b>R</b> starts over.
       </p>
     </section>
   </div>
@@ -282,6 +306,26 @@
   ];
 
   // ===========================================================================
+  // Weapons, copied out of the Weapon_prop table (item-prop.cc:500). The
+  // columns are base damage, base to-hit and "aut to swing at zero skill" --
+  // that last one is what makes a battleaxe feel heavy here, because the swing
+  // spends its own delay out of the same energy pool a step does.
+  // Cleaving is axes only (fight.cc:1214 weapon_cleaves) and hits every actor
+  // in range with a separate full attack (fight.cc:1273 get_cleave_targets).
+  // The Lochaber axe is a bardiche that also cleaves, so it sweeps at reach.
+  // ===========================================================================
+  var WEAPONS = [
+    { name:"short sword", g:"(", dam:5,  hit:4,  delay:10, reach:1, cleave:false,
+      note:"one target, quick" },
+    { name:"trident",     g:"(", dam:9,  hit:1,  delay:13, reach:2, cleave:false,
+      note:"reaches two squares" },
+    { name:"battleaxe",   g:"(", dam:15, hit:-4, delay:17, reach:1, cleave:true,
+      note:"cleaves every adjacent foe" },
+    { name:"Lochaber axe",g:"(", dam:21, hit:-7, delay:20, reach:2, cleave:true,
+      note:"reach-cleave: everything within two" }
+  ];
+
+  // ===========================================================================
   // Crawl's dice
   // ===========================================================================
   function random2(n) { return n <= 0 ? 0 : Math.floor(Math.random() * n); }
@@ -325,7 +369,7 @@
   var viewEl = document.getElementById("view");
   var cols = 0, rows = 0, buf = null, prev = null, forceFull = true;
   var grid, seen, vis, mons, you, depth, aut, rate = 20, dead = false, won = false;
-  var msgs = [], held = null, lastMove = 0;
+  var msgs = [], fx = [];
   var keys = Object.create(null);
 
   var FLOOR = 0, WALL = 1, STAIRS = 2;
@@ -444,26 +488,64 @@
   function the(m) { return "the " + m.t.id; }
 
   // --- player swings ---------------------------------------------------------
-  function playerAttack(m) {
+  function wpn() { return WEAPONS[you.wpn]; }
+
+  // One full attack roll against one defender. A cleave makes several of
+  // these in a single action, exactly as do_followup_attacks does.
+  function strike(m) {
+    var w = wpn();
     // attack.cc:159 player branch: 15 + dex/2 + fighting + weapon skill,
     // then attack.cc:297 mhit = random2(mhit) for the player.
-    var toHitBase = 15 + Math.floor(you.dex / 2) + you.fighting + you.wpnSkill;
-    var margin = testHit(random2(toHitBase), m.t.ev);
+    var toHitBase = 15 + Math.floor(you.dex / 2) + you.fighting + you.wpnSkill + w.hit;
+    m.awake = true;
+    var margin = testHit(random2(Math.max(1, toHitBase)), m.t.ev);
     if (margin < 0) {
       msg("You miss " + the(m) + ".", "note");
+      fx.push({ k:"mark", x:m.x, y:m.y, g:"'", c:8, life:.16, max:.16 });
       return;
     }
-    var dam = random2(you.wpnDam + 1) + Math.floor(you.str / 8);
-    dam = applyAC(dam, m.t.ac);
+    var dam = applyAC(random2(w.dam + 1) + Math.floor(you.str / 8), m.t.ac);
     m.hp -= dam;
+    fx.push({ k:"mark", x:m.x, y:m.y, g:dam > 0 ? "*" : "'",
+              c:dam > 0 ? 12 : 8, life:.2, max:.2 });
     if (dam <= 0) msg("You hit " + the(m) + " but do no damage.", "note");
-    else if (m.hp <= 0) {
-      msg("You kill " + the(m) + "!", "good");
-      you.kills++;
-    } else {
-      msg("You hit " + the(m) + "." + (dam >= m.max / 2 ? " It is badly wounded." : ""), "hit");
+    else if (m.hp <= 0) { msg("You kill " + the(m) + "!", "good"); you.kills++; }
+    else msg("You hit " + the(m) + "."
+             + (dam >= m.max / 2 ? " It is badly wounded." : ""), "hit");
+  }
+
+  // Everything the current weapon reaches, as get_cleave_targets does: every
+  // actor inside the weapon's range, not an arc.
+  function targetsInReach(range) {
+    var out = [];
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i];
+      if (m.hp <= 0) continue;
+      var d = Math.max(Math.abs(m.x - you.x), Math.abs(m.y - you.y));
+      if (d >= 1 && d <= range && losClear(you.x, you.y, m.x, m.y)) out.push(m);
     }
-    m.awake = true;
+    return out;
+  }
+
+  // Returns the auts the swing costs, or 0 if there was nothing to swing at.
+  function swing(primary) {
+    var w = wpn();
+    var hitList;
+    if (w.cleave) hitList = targetsInReach(w.reach);
+    else if (primary) hitList = [primary];
+    else {
+      var near = targetsInReach(w.reach);
+      hitList = near.length ? [near[0]] : [];
+    }
+    if (!hitList.length) return 0;
+
+    if (w.cleave) fx.push({ k:"sweep", x:you.x, y:you.y, r:w.reach,
+                            dir:you.lastDir, life:.3, max:.3, c:14 });
+    else fx.push({ k:"thrust", x0:you.x, y0:you.y,
+                   x1:hitList[0].x, y1:hitList[0].y, life:.2, max:.2, c:11 });
+
+    for (var i = 0; i < hitList.length; i++) strike(hitList[i]);
+    return w.delay;
   }
 
   // --- a monster swings ------------------------------------------------------
@@ -512,8 +594,9 @@
       if (!dir) break;
       // A blocked move takes no time in Crawl, so it must not spend energy --
       // and must not be retried in the same frame either, or the loop spins.
-      if (!doPlayerAction(dir)) break;
-      you.energy -= BASELINE_DELAY;
+      var cost = doPlayerAction(dir);
+      if (!cost) break;
+      you.energy -= cost;
       if (dead || won) return;
     }
 
@@ -549,17 +632,19 @@
     }
   }
 
-  // Returns true when the action actually took time.
+  // Returns the auts the action took, or 0 if nothing happened.
   function doPlayerAction(dir) {
-    if (dir === ".") return true;                        // hold ground
+    if (dir === ".") return BASELINE_DELAY;              // hold ground
+    if (dir === "f") return swing(null);                 // fight.cc:1171
     if (dir === ">") {
-      if (grid[idx(you.x, you.y)] !== STAIRS) return false;
+      if (grid[idx(you.x, you.y)] !== STAIRS) return 0;
       descend();
-      return true;
+      return BASELINE_DELAY;
     }
+    you.lastDir = dir;
     var nx = you.x + dir[0], ny = you.y + dir[1];
     var m = monAt(nx, ny);
-    if (m) { playerAttack(m); return true; }
+    if (m) return swing(m);
     // A real-time affordance, not a rule change: holding a diagonal into a
     // corner would otherwise wedge you there, since nothing re-picks the
     // direction for you between actions the way a turn prompt does. The move
@@ -570,14 +655,14 @@
       else if (!solid(you.x, you.y + dir[1]) && !monAt(you.x, you.y + dir[1]))
         { nx = you.x; ny = you.y + dir[1]; }
     }
-    if (solid(nx, ny)) return false;                     // walked into stone
+    if (solid(nx, ny)) return 0;                         // walked into stone
     var blocker = monAt(nx, ny);
-    if (blocker) { playerAttack(blocker); return true; }
+    if (blocker) return swing(blocker);
     you.x = nx; you.y = ny;
     computeFOV();
     if (grid[idx(nx, ny)] === STAIRS)
       msg("There is a stone staircase down here.", "note");
-    return true;
+    return BASELINE_DELAY;
   }
 
   function monsterAct(m) {
@@ -609,6 +694,7 @@
   }
 
   function heldDir() {
+    if (keys.f) return "f";
     if (keys[">"]) return ">";
     if (keys["."] || keys[" "]) return ".";
     var dx = 0, dy = 0;
@@ -702,6 +788,7 @@
     }
 
     put(ox + you.x, oy + you.y, GI["@"], dead ? 12 : 15);
+    stampFX(ox, oy);
 
     var dirty = 0;
     for (var cy = 0; cy < rows; cy++) for (var cx = 0; cx < cols; cx++) {
@@ -718,6 +805,53 @@
       }
     }
     forceFull = false;
+  }
+
+  // The blade's edge, oriented to the cell it is passing through.
+  function edgeGlyph(dx, dy) {
+    if (!dx) return "|";
+    if (!dy) return "-";
+    return (dx > 0) === (dy > 0) ? "\\" : "/";
+  }
+  // Effects live in real seconds, not auts, so they read the same however
+  // fast the clock is running.
+  function stampFX(ox, oy) {
+    for (var i = 0; i < fx.length; i++) {
+      var e = fx[i], p = 1 - e.life / e.max, j;
+      if (e.k === "mark") {
+        put(ox + e.x, oy + e.y, GI[e.g], e.c);
+      } else if (e.k === "thrust") {
+        var n = Math.max(1, Math.max(Math.abs(e.x1 - e.x0), Math.abs(e.y1 - e.y0)));
+        for (j = 1; j <= n; j++) {
+          if (j / n > p + .34) break;
+          var tx = e.x0 + Math.round((e.x1 - e.x0) * j / n);
+          var ty = e.y0 + Math.round((e.y1 - e.y0) * j / n);
+          put(ox + tx, oy + ty, GI[edgeGlyph(e.x1 - e.x0, e.y1 - e.y0)], e.c);
+        }
+      } else if (e.k === "sweep") {
+        // The arc travels round the wielder, leaving its trail behind it the
+        // way bolt::draw deliberately does not clean up after itself.
+        var ring = [];
+        for (var r = 1; r <= e.r; r++)
+          for (var dy = -r; dy <= r; dy++) for (var dx = -r; dx <= r; dx++)
+            if (Math.max(Math.abs(dx), Math.abs(dy)) === r) ring.push([dx, dy]);
+        var start = e.dir ? Math.atan2(e.dir[1], e.dir[0]) : 0;
+        ring.sort(function (a, b) {
+          function rel(v) {
+            var t = Math.atan2(v[1], v[0]) - start;
+            while (t < 0) t += Math.PI * 2;
+            return t + Math.max(Math.abs(v[0]), Math.abs(v[1])) * 10;
+          }
+          return rel(a) - rel(b);
+        });
+        var upto = Math.ceil(p * ring.length);
+        for (j = 0; j < upto && j < ring.length; j++) {
+          var c = ring[j];
+          if (solid(e.x + c[0], e.y + c[1])) continue;
+          put(ox + e.x + c[0], oy + e.y + c[1], GI[edgeGlyph(c[0], c[1])], e.c);
+        }
+      }
+    }
   }
 
   // ===========================================================================
@@ -759,6 +893,29 @@
     if (near.length === 0) rowsOut.push("<div class='none'>nothing in sight</div>");
     led.innerHTML = rowsOut.join("");
   }
+  function drawRack() {
+    var el = document.getElementById("rack");
+    el.innerHTML = WEAPONS.map(function (w, i) {
+      return "<button class='wp' data-w='" + i + "' aria-pressed='"
+        + (i === you.wpn) + "'><span class='k'>" + (i + 1) + "</span>"
+        + "<span class='n'>" + w.name + "</span>"
+        + "<span class='d'>" + w.dam + "d &middot; " + w.delay + "aut</span>"
+        + "<span class='why'>" + w.note + "</span></button>";
+    }).join("");
+    Array.prototype.forEach.call(el.querySelectorAll(".wp"), function (b) {
+      b.addEventListener("click", function () {
+        b.blur();
+        pickWeapon(+b.dataset.w);
+      });
+    });
+  }
+  function pickWeapon(i) {
+    if (i < 0 || i >= WEAPONS.length || i === you.wpn) return;
+    you.wpn = i;
+    msg("You are wielding a " + WEAPONS[i].name + ".", "note");
+    drawRack();
+  }
+
   function row(g, name, sp, en, cls, colIdx) {
     var pct = Math.min(100, Math.round(en / ENERGY_THRESHOLD * 100));
     var style = colIdx === undefined ? "" : " style='color:" + PAL[colIdx] + "'";
@@ -783,6 +940,7 @@
     var k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
     if (["arrowup","arrowdown","arrowleft","arrowright"," "].indexOf(k) >= 0) e.preventDefault();
     if (k === "r") { start(); return; }
+    if (k >= "1" && k <= "4") { pickWeapon(+k - 1); return; }
     keys[e.key === ">" ? ">" : k] = true;
   });
   document.addEventListener("keyup", function (e) {
@@ -807,6 +965,10 @@
   function frame(now) {
     var dt = Math.min(0.1, (now - last) / 1000 || 0);
     last = now;
+    for (var i = fx.length - 1; i >= 0; i--) {
+      fx[i].life -= dt;
+      if (fx[i].life <= 0) fx.splice(i, 1);
+    }
     tick(dt * rate);
     render();
     uiAcc += dt;
@@ -815,16 +977,18 @@
   }
 
   function start() {
-    dead = false; won = false; depth = 1; aut = 0; msgs = [];
+    dead = false; won = false; depth = 1; aut = 0; msgs = []; fx = [];
     document.getElementById("curtain").hidden = true;
     you = {
       x: 0, y: 0, hp: 22, maxhp: 22, ac: 5, ev: 12, speed: 10,
-      str: 16, dex: 12, fighting: 3, wpnSkill: 4, wpnDam: 7,  // a short sword
+      str: 16, dex: 12, fighting: 3, wpnSkill: 4,
+      wpn: 0, lastDir: [1, 0],
       energy: ENERGY_THRESHOLD, regen: 0, poison: 0, poisonAcc: 0, kills: 0
     };
     spawn();
     msg("Welcome. The clock is already running.", "good");
     resize();
+    drawRack();
     drawRail();
   }
 
