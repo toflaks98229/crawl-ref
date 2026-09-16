@@ -1,0 +1,856 @@
+<title>Lantern Hours</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* Committed single theme: a night field seen through a terminal. It paints
+     its own ground, so it holds on either host theme. */
+  :root {
+    --ground:  #06060d;
+    --panel:   #0e0e1a;
+    --panel-2: #151527;
+    --line:    #242440;
+    --line-lit:#3a3a63;
+    --ink:     #ccc9e0;
+    --dim:     #8582a8;
+    --faint:   #545072;
+    --accent:  #c77dff;   /* the lantern */
+    --xp:      #55ffff;
+    --danger:  #ff5555;
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--mono); font-size: 13px; line-height: 1.45;
+    overflow: hidden;
+  }
+  .app {
+    height: 100%; box-sizing: border-box;
+    display: grid; grid-template-rows: auto 1fr auto;
+    gap: 8px; padding-inline: 12px; padding-block: 9px 11px;
+  }
+
+  /* ---------------- top ---------------- */
+  .top { display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center; }
+  .clock {
+    font-family: var(--cond); font-weight: 700; font-size: 30px; line-height: 1;
+    letter-spacing: .01em; font-variant-numeric: tabular-nums;
+  }
+  .clock small {
+    display: block; font-size: 10px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .xpwrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .xprow { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
+  .xprow b { color: var(--xp); font-weight: 500; }
+  .xpbar { height: 5px; background: #0a0a14; border: 1px solid var(--line); }
+  .xpbar i { display: block; height: 100%; background: var(--xp); }
+  .vit { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+  .vit .n { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .vit .n b { color: var(--danger); font-weight: 500; }
+  .hpbar { height: 5px; width: 132px; background: #0a0a14; border: 1px solid var(--line); }
+  .hpbar i { display: block; height: 100%; background: var(--danger); }
+
+  /* ---------------- field ---------------- */
+  .field {
+    position: relative; background: #030308;
+    border: 1px solid var(--line); overflow: hidden; min-height: 0;
+  }
+  .field canvas { position: absolute; inset: 0; display: block; }
+  .field.shake canvas { animation: jolt .07s steps(1) infinite; }
+  @keyframes jolt {
+    0% { transform: translate(0,0); } 33% { transform: translate(-2px,2px); }
+    66% { transform: translate(2px,-2px); }
+  }
+  .field.flash { background: #2a0a1a; }
+
+  .hint {
+    position: absolute; left: 10px; right: 10px; bottom: 6px; text-align: center;
+    font-size: 10.5px; color: var(--faint); pointer-events: none;
+    text-shadow: 0 0 6px #030308, 0 0 6px #030308;
+  }
+  .hint kbd { color: var(--accent); }
+
+  /* ---------------- overlays ---------------- */
+  .veil {
+    position: absolute; inset: 0; display: grid; place-content: center;
+    gap: 14px; background: rgba(3,3,8,.9); padding: 22px; text-align: center;
+  }
+  .veil[hidden] { display: none !important; }
+  .veil h2 {
+    font-family: var(--cond); font-weight: 700; font-size: 30px; margin: 0;
+    letter-spacing: -.01em;
+  }
+  .veil p { margin: 0; color: var(--dim); max-width: 46ch; }
+
+  .picks { display: grid; grid-template-columns: repeat(3, minmax(0, 210px)); gap: 10px; }
+  .pick {
+    font: inherit; text-align: left; cursor: pointer; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line);
+    border-top: 2px solid var(--line-lit);
+    padding: 11px 12px; display: flex; flex-direction: column; gap: 5px;
+  }
+  .pick:hover { border-color: var(--line-lit); background: var(--panel-2); }
+  .pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pick .hd { display: flex; align-items: baseline; gap: 8px; }
+  .pick .k { color: var(--accent); font-weight: 600; }
+  .pick .nm { font-family: var(--cond); font-weight: 700; font-size: 15px; }
+  .pick .lv { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+  .pick .ds { font-size: 11px; color: var(--dim); }
+  .pick .src { font-size: 10px; color: var(--faint); }
+  @media (max-width: 720px) { .picks { grid-template-columns: 1fr; } }
+
+  /* ---------------- bottom loadout ---------------- */
+  .load { display: flex; gap: 6px; overflow-x: auto; align-items: stretch; min-height: 50px; }
+  .chip {
+    flex: 0 0 auto; min-width: 116px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    padding: 5px 8px; display: flex; flex-direction: column; gap: 1px;
+  }
+  .chip.passive { border-left-color: var(--xp); }
+  .chip .t { display: flex; gap: 7px; align-items: baseline; }
+  .chip .g { color: var(--accent); font-weight: 600; }
+  .chip.passive .g { color: var(--xp); }
+  .chip .n { font-size: 11.5px; }
+  .chip .l { margin-left: auto; font-size: 10.5px; color: var(--faint);
+             font-variant-numeric: tabular-nums; }
+  .chip .p { font-size: 9.5px; color: var(--faint); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+  .load .empty { color: var(--faint); font-size: 11px; align-self: center; padding-left: 4px; }
+
+  button.ui {
+    font: inherit; font-size: 11.5px; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 2px; padding: 6px 13px; cursor: pointer;
+  }
+  button.ui:hover { border-color: var(--line-lit); }
+  button.ui:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .stat { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+          display: flex; gap: 12px; align-items: center; }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="clock"><small>Survived</small><span id="clock">0:00</span></div>
+    <div class="xpwrap">
+      <div class="xprow"><span>Level <b id="lv">1</b></span><span id="xpn"></span></div>
+      <div class="xpbar"><i id="xpbar" style="width:0%"></i></div>
+      <div class="stat">
+        <span>foes <b id="n-foe">0</b></span>
+        <span>effects <b id="n-fx">0</b></span>
+        <span>repainted <b id="n-dirty">0</b></span>
+        <span>frame <b id="n-ms">0</b></span>
+      </div>
+    </div>
+    <div class="vit">
+      <div class="n">HP <b id="hp"></b></div>
+      <div class="hpbar"><i id="hpbar" style="width:100%"></i></div>
+      <div class="n" id="kills"></div>
+    </div>
+  </header>
+
+  <div class="field" id="field">
+    <canvas id="screen"></canvas>
+    <div class="hint">
+      <kbd>WASD</kbd> or arrows to move &mdash; everything fires itself.
+      <kbd>1</kbd>&ndash;<kbd>3</kbd> choose on level up. <kbd>R</kbd> restarts.
+    </div>
+    <div class="veil" id="levelup" hidden>
+      <h2 style="color:var(--accent)">The lantern brightens</h2>
+      <p id="lvl-sub"></p>
+      <div class="picks" id="picks"></div>
+    </div>
+    <div class="veil" id="over" hidden>
+      <h2 id="over-h"></h2>
+      <p id="over-p"></p>
+      <div><button class="ui" id="again">Walk out again</button></div>
+    </div>
+  </div>
+
+  <footer class="load" id="load"></footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ===========================================================================
+  // Geometry. The cell is a console character box, 1 wide by 2 tall
+  // (CLAUDE.md), so the world is measured in cell WIDTHS on both axes and the
+  // y mapping divides by two. Circles stay circles that way.
+  // ===========================================================================
+  var CELL_W = 14, CELL_H = 28;
+  var YS = 2;                         // world units per cell row
+
+  var PAL = ["#000000","#3b4cc0","#00aa00","#00aaaa","#aa0000","#aa00aa",
+             "#aa5500","#8f8caa","#3a3856","#5555ff","#55ff55","#55ffff",
+             "#ff5555","#ff55ff","#ffff55","#ffffff",
+             "#c77dff","#7a3fb0","#1a1a2e","#12121f"];
+  var C = { grass: 18, grass2: 19, us: 16, xp: 11, hurt: 12, ink: 15 };
+
+  var GLYPHS = (" .,'\"`:;*#@%^~=-+|/\\_<>()[]!?$&0123456789"
+    + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    + "Λ·═║╔╗╚╝"
+    + "─│┌┐└┘").split("");
+  var GI = {};
+  GLYPHS.forEach(function (g, i) { if (GI[g] === undefined) GI[g] = i; });
+  var RAMP = [GI[":"], GI[";"], GI["*"], GI["#"], GI["@"]];
+
+  function rnd(n) { return Math.random() * n; }
+  function ri(n) { return Math.floor(Math.random() * n); }
+  function pick(a) { return a[ri(a.length)]; }
+
+  // ===========================================================================
+  // Foes. Glyphs, colours and the shape of their stats come from
+  // dat/mons/*.yaml; hp is scaled by how long you have lasted.
+  // ===========================================================================
+  var FOES = [
+    { id:"rat",      g:"r", c:6,  hp:3,  sp:7.5, dmg:4, from:0 },
+    { id:"bat",      g:"b", c:7,  hp:2,  sp:13,  dmg:3, from:0, weave:true },
+    { id:"jackal",   g:"h", c:6,  hp:4,  sp:10,  dmg:5, from:0.5 },
+    { id:"goblin",   g:"g", c:7,  hp:6,  sp:7,   dmg:6, from:1 },
+    { id:"adder",    g:"S", c:10, hp:8,  sp:8.5, dmg:7, from:1.5 },
+    { id:"orc",      g:"o", c:12, hp:12, sp:7,   dmg:9, from:2 },
+    { id:"hound",    g:"h", c:14, hp:14, sp:11,  dmg:9, from:2.5 },
+    { id:"ufetubus", g:"5", c:11, hp:10, sp:12,  dmg:8, from:3, weave:true },
+    { id:"ogre",     g:"O", c:6,  hp:44, sp:5.5, dmg:18, from:3.5 }
+  ];
+
+  // ===========================================================================
+  // Arms. Every one of them is drawn by a primitive lifted out of Crawl, and
+  // the chip in the loadout names which.
+  // ===========================================================================
+  var ARMS = [
+    { id:"whip", g:"~", name:"Whip", kind:"weapon",
+      src:"bolt::draw — beam.cc:721",
+      desc:"Lashes out to both sides along the ground.",
+      base:{ cd:1.15, dmg:9, len:13 },
+      per:function (L) { return { cd: 1.15 - L*0.09, dmg: 9 + L*6, len: 13 + L*2.6 }; } },
+
+    { id:"knives", g:"/", name:"Knives", kind:"weapon",
+      src:"bolt::draw — beam.cc:721",
+      desc:"Throws at whatever is nearest. Pierces what it passes.",
+      base:{ cd:0.75, dmg:7, n:1 },
+      per:function (L) { return { cd: 0.75 - L*0.05, dmg: 7 + L*4, n: 1 + Math.floor(L/2) }; } },
+
+    { id:"censer", g:"o", name:"Censer", kind:"weapon",
+      src:"draw_ring_animation — view.cc:787",
+      desc:"A ring of smoke that keeps burning everything close.",
+      base:{ cd:1.5, dmg:6, r:5 },
+      per:function (L) { return { cd: 1.5 - L*0.11, dmg: 6 + L*4, r: 5 + L*1.5 }; } },
+
+    { id:"firepot", g:"*", name:"Fire pot", kind:"weapon",
+      src:"bolt::explode radial sweep — beam.cc:6985",
+      desc:"Lobbed into the thick of them. Blooms outward.",
+      base:{ cd:2.4, dmg:20, r:4 },
+      per:function (L) { return { cd: 2.4 - L*0.16, dmg: 20 + L*12, r: 4 + L*0.9 }; } },
+
+    { id:"arc", g:"|", name:"Arc", kind:"weapon",
+      src:"bolt::draw, chained — beam.cc:721",
+      desc:"Jumps from foe to foe until it runs out of leaps.",
+      base:{ cd:1.9, dmg:12, hops:3 },
+      per:function (L) { return { cd: 1.9 - L*0.13, dmg: 12 + L*7, hops: 3 + L }; } },
+
+    { id:"lantern", g:"0", name:"Lantern", kind:"weapon",
+      src:"orb_animation — view.cc:519",
+      desc:"A slow wave of light that sweeps the whole field.",
+      base:{ cd:9, dmg:34, r:26 },
+      per:function (L) { return { cd: 9 - L*0.55, dmg: 34 + L*20, r: 26 + L*5 }; } },
+
+    { id:"boots", g:"[", name:"Swift boots", kind:"passive",
+      src:"", desc:"You move faster.",
+      per:function (L) { return { move: 1 + L*0.13 }; } },
+    { id:"heart", g:"%", name:"Stout heart", kind:"passive",
+      src:"", desc:"More life, and some of it back now.",
+      per:function (L) { return { hp: L*22 }; } },
+    { id:"stone", g:"$", name:"Lodestone", kind:"passive",
+      src:"", desc:"Pulls loose sparks in from further off.",
+      per:function (L) { return { pick: 8 + L*3.6 }; } },
+    { id:"glass", g:"!", name:"Hourglass", kind:"passive",
+      src:"", desc:"Everything you carry comes round sooner.",
+      per:function (L) { return { haste: 1 - L*0.07 }; } }
+  ];
+  var MAX_SLOTS = 6;
+
+  // ===========================================================================
+  // State
+  // ===========================================================================
+  var cv = document.getElementById("screen"), ctx = cv.getContext("2d", { alpha:false });
+  var fieldEl = document.getElementById("field");
+  var cols = 0, rows = 0, buf = null, prev = null, forceFull = true;
+  var counts = null, owner = null;
+
+  var you, foes, gems, fx, held, t, over_, paused, kills, stat;
+  var keys = Object.create(null);
+  var RUN_LENGTH = 300;               // five minutes
+
+  function statsOf() {
+    var s = { move:1, hp:0, pick:8, haste:1 };
+    you.arms.forEach(function (a) {
+      if (a.def.kind !== "passive") return;
+      var p = a.def.per(a.lv);
+      if (p.move) s.move = p.move;
+      if (p.hp) s.hp = p.hp;
+      if (p.pick) s.pick = p.pick;
+      if (p.haste) s.haste = p.haste;
+    });
+    return s;
+  }
+
+  // ===========================================================================
+  // Renderer -- cell buffer, repaint only what changed (BENCH.md)
+  // ===========================================================================
+  function resize() {
+    var r = fieldEl.getBoundingClientRect();
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cols = Math.max(24, Math.floor(r.width / CELL_W));
+    rows = Math.max(12, Math.floor(r.height / CELL_H));
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    cv.style.width = r.width + "px";
+    cv.style.height = r.height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.font = Math.round(CELL_H * 0.74) + "px " +
+      getComputedStyle(document.body).fontFamily;
+    buf = new Int32Array(cols * rows);
+    prev = new Int32Array(cols * rows).fill(-1);
+    counts = new Uint16Array(cols * rows);
+    owner = new Int32Array(cols * rows);
+    forceFull = true;
+  }
+  function camL() { return you.x - cols / 2; }
+  function camT() { return you.y - rows * YS / 2; }
+  function toCellX(wx) { return (wx - camL()); }
+  function toCellY(wy) { return (wy - camT()) / YS; }
+  function put(cx, cy, g, c) {
+    cx |= 0; cy |= 0;
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+    buf[cy * cols + cx] = g << 8 | c;
+  }
+  function putStr(cx, cy, s, c) {
+    for (var i = 0; i < s.length; i++) {
+      var gi = GI[s.charAt(i)];
+      if (gi !== undefined) put(cx + i, cy, gi, c);
+    }
+  }
+
+  function render() {
+    var t0 = performance.now();
+    counts.fill(0);
+
+    // ground: a sparse, stable texture so movement reads
+    var L = camL(), T = camT();
+    for (var cy = 0; cy < rows; cy++) for (var cx = 0; cx < cols; cx++) {
+      var wx = Math.floor(L) + cx, wy = Math.floor(T / YS) + cy;
+      var h = (wx * 73856093 ^ wy * 19349663) >>> 0;
+      var g = (h % 23 === 0) ? GI[","] : (h % 11 === 0) ? GI["."] : 0;
+      buf[cy * cols + cx] = g << 8 | ((h % 23 === 0) ? C.grass : C.grass2);
+    }
+
+    // sparks: dim where they lie, bright once they are coming to you
+    for (var i = 0; i < gems.length; i++) {
+      var gm = gems[i];
+      put(toCellX(gm.x), toCellY(gm.y), GI[gm.pull ? "*" : "."],
+          gm.pull ? C.xp : 3);
+    }
+
+    // the horde. Where several share a cell, a density glyph stands in for
+    // them, which is how the battle game draws a block of troops.
+    for (var f = 0; f < foes.length; f++) {
+      var m = foes[f];
+      var px = toCellX(m.x) | 0, py = toCellY(m.y) | 0;
+      if (px < 0 || py < 0 || px >= cols || py >= rows) continue;
+      var id = py * cols + px;
+      counts[id]++;
+      owner[id] = f;
+    }
+    for (var k = 0; k < counts.length; k++) {
+      var n = counts[k];
+      if (!n) continue;
+      var m2 = foes[owner[k]];
+      var col = m2.hurt > 0 ? C.ink : m2.def.c;
+      buf[k] = (n === 1 ? GI[m2.def.g] : RAMP[Math.min(4, n - 1)]) << 8 | col;
+    }
+
+    stampFX();
+    put(toCellX(you.x), toCellY(you.y), GI["@"], you.iframe > 0 ? C.ink : C.us);
+
+    var dirty = 0;
+    for (var y2 = 0; y2 < rows; y2++) for (var x2 = 0; x2 < cols; x2++) {
+      var ix = y2 * cols + x2, v = buf[ix];
+      if (!forceFull && prev[ix] === v) continue;
+      prev[ix] = v; dirty++;
+      ctx.fillStyle = "#030308";
+      ctx.fillRect(x2 * CELL_W, y2 * CELL_H, CELL_W, CELL_H);
+      var gi = v >> 8;
+      if (gi) {
+        ctx.fillStyle = PAL[v & 255];
+        ctx.fillText(GLYPHS[gi], x2 * CELL_W + CELL_W / 2, y2 * CELL_H + CELL_H / 2);
+      }
+    }
+    forceFull = false;
+    stat.dirty = dirty;
+    stat.ms = stat.ms * 0.88 + (performance.now() - t0) * 0.12;
+  }
+
+  // ===========================================================================
+  // The staging. Each of these is one of the primitives ported at the start of
+  // this project; they run on the wall clock so they read at any density.
+  // ===========================================================================
+  function stampFX() {
+    for (var i = 0; i < fx.length; i++) {
+      var e = fx[i], p = 1 - e.life / e.max, j;
+      if (e.k === "num") continue;              // a pass of its own, below
+
+      if (e.k === "line") {                       // bolt::draw
+        var n = Math.max(1, Math.round(Math.hypot(
+          toCellX(e.x1) - toCellX(e.x0), toCellY(e.y1) - toCellY(e.y0))));
+        for (j = 0; j <= n; j++) {
+          if (j / n > p + 0.42) break;
+          put(toCellX(e.x0) + (toCellX(e.x1) - toCellX(e.x0)) * j / n,
+              toCellY(e.y0) + (toCellY(e.y1) - toCellY(e.y0)) * j / n,
+              GI[e.g], e.c);
+        }
+
+      } else if (e.k === "ring") {                // draw_ring_animation
+        var rr = e.r * (e.inward ? 1 - p : p);
+        for (j = 0; j < 44; j++) {
+          var th = j / 44 * Math.PI * 2;
+          put(toCellX(e.x + Math.cos(th) * rr),
+              toCellY(e.y + Math.sin(th) * rr), GI[e.g], e.c);
+        }
+
+      } else if (e.k === "burst") {               // bolt::explode radial sweep
+        var band = e.r * p;
+        for (var dy = -e.r; dy <= e.r; dy += 0.5)
+          for (var dx = -e.r; dx <= e.r; dx += 0.5) {
+            var d = Math.hypot(dx, dy);
+            if (d > band || d < band - 1.4) continue;
+            put(toCellX(e.x + dx), toCellY(e.y + dy), GI["#"], e.c);
+          }
+
+      } else if (e.k === "wave") {                // orb_animation
+        var lo = e.r * p, hi = lo + 2.4;
+        for (var a = 0; a < 190; a++) {
+          var an = a / 190 * Math.PI * 2, rad = lo + Math.random() * (hi - lo);
+          put(toCellX(e.x + Math.cos(an) * rad),
+              toCellY(e.y + Math.sin(an) * rad), GI["*"], e.c);
+        }
+
+      } else if (e.k === "pop") {                 // a kill
+        var pr = 1.6 * p;
+        for (j = 0; j < 8; j++) {
+          var pa = j / 8 * Math.PI * 2;
+          put(toCellX(e.x + Math.cos(pa) * pr),
+              toCellY(e.y + Math.sin(pa) * pr), GI["'"], e.c);
+        }
+
+      }
+    }
+    // Numbers last, so nothing paints over a digit.
+    for (var n = 0; n < fx.length; n++) {
+      var d = fx[n];
+      if (d.k !== "num") continue;
+      var q = 1 - d.life / d.max;
+      putStr(toCellX(d.x) - (d.s.length / 2 | 0),
+             toCellY(d.y) - 1 - q * 2.2, d.s, d.c);
+    }
+  }
+
+  function num(x, y, v, c) {
+    if (fx.length > 260) return;
+    fx.push({ k:"num", x:x, y:y, s:String(Math.round(v)), c:c||C.ink,
+              life:0.5, max:0.5 });
+  }
+
+  // ===========================================================================
+  // Damage
+  // ===========================================================================
+  function hurtFoe(m, dmg, colour) {
+    m.hp -= dmg;
+    m.hurt = 0.07;
+    num(m.x, m.y, dmg, colour || C.ink);
+    if (m.hp <= 0) {
+      m.dead = true;
+      kills++;
+      fx.push({ k:"pop", x:m.x, y:m.y, c:m.def.c, life:0.22, max:0.22 });
+      gems.push({ x:m.x, y:m.y, v:m.def.hp > 20 ? 5 : 1, pull:false });
+      if (gems.length > 220) gems.shift();
+    }
+  }
+  function foesIn(x, y, r) {
+    var out = [], rr = r * r;
+    for (var i = 0; i < foes.length; i++) {
+      var m = foes[i];
+      if (m.dead) continue;
+      var dx = m.x - x, dy = m.y - y;
+      if (dx * dx + dy * dy <= rr) out.push(m);
+    }
+    return out;
+  }
+  function nearestFoe(x, y, skip) {
+    var best = null, bd = 1e9;
+    for (var i = 0; i < foes.length; i++) {
+      var m = foes[i];
+      if (m.dead || (skip && skip.indexOf(m) >= 0)) continue;
+      var d = (m.x - x) * (m.x - x) + (m.y - y) * (m.y - y);
+      if (d < bd) { bd = d; best = m; }
+    }
+    return best;
+  }
+
+  // ===========================================================================
+  // Arms firing
+  // ===========================================================================
+  function fireArm(a) {
+    var p = a.def.per(a.lv), s = statsOf();
+    a.t = p.cd * s.haste;
+
+    if (a.def.id === "whip") {
+      [1, -1].forEach(function (dir) {
+        var x1 = you.x + dir * p.len;
+        fx.push({ k:"line", x0:you.x, y0:you.y, x1:x1, y1:you.y,
+                  g:"~", c:C.us, life:0.2, max:0.2 });
+        foesIn(you.x + dir * p.len / 2, you.y, p.len / 2 + 1.5).forEach(function (m) {
+          if ((m.x - you.x) * dir > -1) hurtFoe(m, p.dmg, C.us);
+        });
+      });
+
+    } else if (a.def.id === "knives") {
+      var taken = [];
+      for (var i = 0; i < p.n; i++) {
+        var tgt = nearestFoe(you.x, you.y, taken);
+        if (!tgt) break;
+        taken.push(tgt);
+        var dx = tgt.x - you.x, dy = tgt.y - you.y, L2 = Math.hypot(dx, dy) || 1;
+        var ex = you.x + dx / L2 * 34, ey = you.y + dy / L2 * 34;
+        fx.push({ k:"line", x0:you.x, y0:you.y, x1:ex, y1:ey,
+                  g:"/", c:15, life:0.17, max:0.17 });
+        // pierce: everything close to the line takes it
+        foes.forEach(function (m) {
+          if (m.dead) return;
+          var t2 = ((m.x - you.x) * dx + (m.y - you.y) * dy) / (L2 * L2);
+          if (t2 < 0 || t2 > 1.9) return;
+          var px = you.x + dx * t2, py = you.y + dy * t2;
+          if (Math.hypot(m.x - px, m.y - py) < 1.6) hurtFoe(m, p.dmg, 15);
+        });
+      }
+
+    } else if (a.def.id === "censer") {
+      fx.push({ k:"ring", x:you.x, y:you.y, r:p.r, g:"o", c:C.us,
+                life:0.34, max:0.34 });
+      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us); });
+
+    } else if (a.def.id === "firepot") {
+      var tg = nearestFoe(you.x, you.y);
+      var cx = tg ? tg.x : you.x + 6, cy = tg ? tg.y : you.y;
+      fx.push({ k:"burst", x:cx, y:cy, r:p.r, c:12, life:0.42, max:0.42 });
+      foesIn(cx, cy, p.r).forEach(function (m) { hurtFoe(m, p.dmg, 12); });
+
+    } else if (a.def.id === "arc") {
+      var from = { x:you.x, y:you.y }, chain = [];
+      for (var h = 0; h < p.hops; h++) {
+        var nx = nearestFoe(from.x, from.y, chain);
+        if (!nx || Math.hypot(nx.x - from.x, nx.y - from.y) > 26) break;
+        chain.push(nx);
+        fx.push({ k:"line", x0:from.x, y0:from.y, x1:nx.x, y1:nx.y,
+                  g:"|", c:11, life:0.22, max:0.22 });
+        hurtFoe(nx, p.dmg, 11);
+        from = nx;
+      }
+
+    } else if (a.def.id === "lantern") {
+      fx.push({ k:"wave", x:you.x, y:you.y, r:p.r, c:C.us, life:0.85, max:0.85 });
+      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us); });
+      flash(0.16);
+    }
+  }
+
+  // ===========================================================================
+  // Waves
+  // ===========================================================================
+  function spawnWave(dt) {
+    var minute = t / 60;
+    var want = 45 + minute * 135;
+    var alive = foes.length;
+    var rate = Math.min(260, (want - alive) * 2.4);
+    if (rate <= 0) return;
+    you.spawnAcc += rate * dt;
+    var pool = FOES.filter(function (f) { return minute >= f.from; });
+    while (you.spawnAcc >= 1) {
+      you.spawnAcc--;
+      var def = pool[ri(pool.length)];
+      var an = rnd(Math.PI * 2);
+      var rad = cols * 0.62;
+      var scale = 1 + minute * 0.62;
+      foes.push({
+        def: def,
+        x: you.x + Math.cos(an) * rad,
+        y: you.y + Math.sin(an) * rad * 0.9,
+        hp: def.hp * scale, hurt: 0, dead: false, ph: rnd(6.3)
+      });
+    }
+  }
+
+  // ===========================================================================
+  // Step
+  // ===========================================================================
+  function flash(d) {
+    fieldEl.classList.add("flash");
+    setTimeout(function () { fieldEl.classList.remove("flash"); }, d * 1000);
+  }
+  function jolt() {
+    fieldEl.classList.add("shake");
+    setTimeout(function () { fieldEl.classList.remove("shake"); }, 180);
+  }
+
+  function step(dt) {
+    t += dt;
+    var s = statsOf();
+
+    // --- you ---------------------------------------------------------------
+    var mx = 0, my = 0;
+    if (keys.a || keys.arrowleft) mx -= 1;
+    if (keys.d || keys.arrowright) mx += 1;
+    if (keys.w || keys.arrowup) my -= 1;
+    if (keys.s || keys.arrowdown) my += 1;
+    if (mx || my) {
+      var l = Math.hypot(mx, my);
+      var v = 13 * s.move * dt;
+      you.x += mx / l * v; you.y += my / l * v;
+    }
+    you.iframe -= dt;
+
+    // --- arms --------------------------------------------------------------
+    you.arms.forEach(function (a) {
+      if (a.def.kind === "passive") return;
+      a.t -= dt;
+      if (a.t <= 0) fireArm(a);
+    });
+
+    // --- the horde ---------------------------------------------------------
+    spawnWave(dt);
+    var touched = 0;
+    for (var i = 0; i < foes.length; i++) {
+      var m = foes[i];
+      if (m.dead) continue;
+      m.hurt -= dt;
+      var dx = you.x - m.x, dy = you.y - m.y, d = Math.hypot(dx, dy) || 1;
+      var sp = m.def.sp;
+      var wob = m.def.weave ? Math.sin(t * 5 + m.ph) * 0.55 : 0;
+      m.x += (dx / d + (-dy / d) * wob) * sp * dt;
+      m.y += (dy / d + (dx / d) * wob) * sp * dt;
+      if (d < 1.5) touched = Math.max(touched, m.def.dmg);
+    }
+    if (touched > 0 && you.iframe <= 0) {
+      you.hp -= touched;
+      you.iframe = 0.42;
+      jolt();
+      if (you.hp <= 0) { finish(false); return; }
+    }
+    foes = foes.filter(function (m) { return !m.dead; });
+
+    // --- sparks ------------------------------------------------------------
+    for (var gI = gems.length - 1; gI >= 0; gI--) {
+      var gm = gems[gI];
+      var gdx = you.x - gm.x, gdy = you.y - gm.y, gd = Math.hypot(gdx, gdy) || 1;
+      gm.pull = gd < s.pick;
+      if (gm.pull) {
+        gm.x += gdx / gd * 34 * dt; gm.y += gdy / gd * 34 * dt;
+        if (gd < 1.2) {
+          you.xp += gm.v;
+          gems.splice(gI, 1);
+          if (you.xp >= you.need) levelUp();
+        }
+      }
+    }
+
+    // --- effects age on the wall clock -------------------------------------
+    for (var e = fx.length - 1; e >= 0; e--) {
+      fx[e].life -= dt;
+      if (fx[e].life <= 0) fx.splice(e, 1);
+    }
+
+    if (t >= RUN_LENGTH) finish(true);
+  }
+
+  // ===========================================================================
+  // Levelling
+  // ===========================================================================
+  function levelUp() {
+    you.xp -= you.need;
+    you.lv++;
+    you.need = Math.round(you.need * 1.42 + 4);
+    paused = true;
+    flash(0.2);
+
+    var owned = you.arms.map(function (a) { return a.def.id; });
+    var pool = ARMS.filter(function (d) {
+      if (owned.indexOf(d.id) >= 0) {
+        var a = you.arms.filter(function (x) { return x.def.id === d.id; })[0];
+        return a.lv < 5;
+      }
+      return you.arms.length < MAX_SLOTS;
+    });
+    var offer = [];
+    while (offer.length < 3 && pool.length) offer.push(pool.splice(ri(pool.length), 1)[0]);
+    if (!offer.length) { paused = false; return; }
+
+    var box = document.getElementById("picks");
+    box.innerHTML = "";
+    document.getElementById("lvl-sub").textContent =
+      "Level " + you.lv + ". " + (you.arms.length >= MAX_SLOTS
+        ? "Your hands are full — only what you already carry can grow."
+        : "Take one.");
+    offer.forEach(function (d, i) {
+      var have = you.arms.filter(function (x) { return x.def.id === d.id; })[0];
+      var b = document.createElement("button");
+      b.className = "pick";
+      b.innerHTML = "<span class='hd'><span class='k'>" + (i + 1) + "</span>"
+        + "<span class='nm'>" + d.name + "</span>"
+        + "<span class='lv'>" + (have ? "lv " + have.lv + " → " + (have.lv + 1)
+                                      : "new") + "</span></span>"
+        + "<span class='ds'>" + d.desc + "</span>"
+        + (d.src ? "<span class='src'>" + d.src + "</span>" : "");
+      b.addEventListener("click", function () { take(d); });
+      box.appendChild(b);
+    });
+    window.__offer = offer;
+    document.getElementById("levelup").hidden = false;
+  }
+
+  function take(d) {
+    var have = you.arms.filter(function (x) { return x.def.id === d.id; })[0];
+    if (have) have.lv++;
+    else you.arms.push({ def:d, lv:1, t:0 });
+    if (d.id === "heart") {
+      var s = statsOf();
+      you.maxhp = 100 + s.hp;
+      you.hp = Math.min(you.maxhp, you.hp + 22);
+    }
+    document.getElementById("levelup").hidden = true;
+    window.__offer = null;
+    paused = false;
+    forceFull = true;
+    drawLoad();
+  }
+
+  function finish(won) {
+    over_ = won ? "won" : "lost";
+    paused = true;
+    document.getElementById("over-h").textContent =
+      won ? "Dawn" : "The lantern goes out";
+    document.getElementById("over-h").style.color = won ? PAL[16] : PAL[12];
+    document.getElementById("over-p").textContent =
+      (won ? "Five minutes, and you walked out of it. " : "")
+      + kills + " put down, level " + you.lv + ", "
+      + Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0")
+      + " on the clock.";
+    document.getElementById("over").hidden = false;
+  }
+
+  // ===========================================================================
+  // Chrome
+  // ===========================================================================
+  function drawLoad() {
+    var el = document.getElementById("load");
+    el.innerHTML = "";
+    if (!you.arms.length) {
+      el.innerHTML = "<span class='empty'>nothing yet — collect sparks</span>";
+      return;
+    }
+    you.arms.forEach(function (a) {
+      var d = document.createElement("div");
+      d.className = "chip" + (a.def.kind === "passive" ? " passive" : "");
+      d.innerHTML = "<span class='t'><span class='g'>" + a.def.g + "</span>"
+        + "<span class='n'>" + a.def.name + "</span>"
+        + "<span class='l'>lv " + a.lv + "</span></span>"
+        + "<span class='p'>" + (a.def.src || "passive") + "</span>";
+      el.appendChild(d);
+    });
+  }
+  function drawTop() {
+    var s = Math.floor(t);
+    document.getElementById("clock").textContent =
+      Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    document.getElementById("lv").textContent = you.lv;
+    document.getElementById("xpn").textContent = you.xp + " / " + you.need;
+    document.getElementById("xpbar").style.width =
+      Math.min(100, you.xp / you.need * 100) + "%";
+    document.getElementById("hp").textContent =
+      Math.max(0, Math.round(you.hp)) + " / " + Math.round(you.maxhp);
+    document.getElementById("hpbar").style.width =
+      Math.max(0, you.hp / you.maxhp * 100) + "%";
+    document.getElementById("kills").textContent = kills + " put down";
+    document.getElementById("n-foe").textContent = foes.length;
+    document.getElementById("n-fx").textContent = fx.length;
+    document.getElementById("n-dirty").textContent = stat.dirty;
+    document.getElementById("n-ms").textContent = stat.ms.toFixed(1) + "ms";
+  }
+
+  // ===========================================================================
+  // Input and loop
+  // ===========================================================================
+  function typing(e) {
+    var n = e.target;
+    return n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || n.isContentEditable);
+  }
+  document.addEventListener("keydown", function (e) {
+    if (typing(e)) return;
+    var k = e.key.toLowerCase();
+    if (["arrowup","arrowdown","arrowleft","arrowright"," "].indexOf(k) >= 0) e.preventDefault();
+    if (k === "r") { start(); return; }
+    if (window.__offer && k >= "1" && k <= "3") {
+      var d = window.__offer[+k - 1];
+      if (d) take(d);
+      return;
+    }
+    keys[k] = true;
+  });
+  document.addEventListener("keyup", function (e) {
+    if (typing(e)) return;
+    keys[e.key.toLowerCase()] = false;
+  });
+  window.addEventListener("blur", function () { keys = Object.create(null); });
+  document.getElementById("again").addEventListener("click", function () { start(); });
+
+  var last = 0, uiAcc = 0;
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000 || 0);
+    last = now;
+    if (!paused && !over_) step(dt);
+    render();
+    uiAcc += dt;
+    if (uiAcc > 0.12) { uiAcc = 0; drawTop(); }
+    requestAnimationFrame(frame);
+  }
+
+  function start() {
+    over_ = null; paused = false; t = 0; kills = 0;
+    foes = []; gems = []; fx = [];
+    stat = { dirty:0, ms:0 };
+    you = { x:0, y:0, hp:100, maxhp:100, lv:1, xp:0, need:5,
+            arms:[], iframe:0, spawnAcc:0 };
+    // you start with one, so something is always firing
+    you.arms.push({ def: ARMS[0], lv:1, t:0.4 });
+    window.__offer = null;
+    document.getElementById("levelup").hidden = true;
+    document.getElementById("over").hidden = true;
+    resize();
+    drawLoad();
+    drawTop();
+  }
+
+  window.addEventListener("resize", function () { resize(); });
+  start();
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(frame); });
+})();
+</script>
