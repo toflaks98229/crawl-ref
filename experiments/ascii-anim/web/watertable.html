@@ -633,11 +633,16 @@
 
   function say(s) { document.getElementById("say").textContent = s; }
 
-  function startWorker() {
-    var src = "(" + workerMain.toString() + ")()";
-    var url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-    worker = new Worker(url);
-    worker.onmessage = function (e) {
+  // A blob worker needs no server and works from file://, which is why
+  // generation is off the main thread here. It can still be refused -- a host
+  // whose content policy forbids blob: scripts will simply not start one --
+  // and a page that sits on "generating" for ever because of that is a worse
+  // outcome than one that stutters for a fifth of a second. So: try the
+  // worker, watch for it failing, and otherwise run the very same function
+  // inline with a stand-in for `self`.
+  var usingWorker = true, watchdog = 0;
+
+  function onGenMessage(e) {
       var d = e.data;
       if (d.type === "try") { gen.attempt = d.attempt; return; }
       W = {
@@ -647,6 +652,7 @@
         volc: new Float32Array(d.volc), flow: new Uint16Array(d.flow),
         lake: new Uint8Array(d.lake), biome: new Uint8Array(d.biome)
       };
+      clearTimeout(watchdog);
       gen.busy = false; gen.tries = d.tries; gen.ms = d.ms;
       gen.accepted = d.accepted; gen.fails = d.fails; gen.seed = d.seed;
       gen.landFrac = d.landFrac; gen.mouths = d.mouths; gen.kinds = d.kinds;
@@ -655,12 +661,54 @@
       say("World " + d.seed.toString(16) + " ready after " + d.tries +
           (d.tries === 1 ? " attempt" : " attempts") +
           (d.accepted ? "." : " (accepted under protest: " + d.fails.join(", ") + ")."));
-    };
   }
+
+  function inlineWorker() {
+    // The same function, with `self` shadowed by a stand-in. Nothing is
+    // transferred because nothing crosses a thread, so the buffers arrive
+    // attached rather than detached -- which the receiving side does not care
+    // about either way.
+    var host = { onmessage: null, postMessage: function (d) { onGenMessage({ data: d }); } };
+    (new Function("self", "(" + workerMain.toString() + ")();"))(host);
+    return { postMessage: function (d) { host.onmessage({ data: d }); } };
+  }
+
+  function fallBack(why) {
+    if (!usingWorker) return;
+    usingWorker = false;
+    if (worker) { try { worker.terminate(); } catch (e) {} }
+    worker = inlineWorker();
+    say("Generating on the main thread (" + why + ").");
+    if (gen.busy && gen.last) worker.postMessage(gen.last);
+  }
+
+  function startWorker() {
+    try {
+      var src = "(" + workerMain.toString() + ")()";
+      var url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+      worker = new Worker(url);
+      worker.onmessage = onGenMessage;
+      worker.onerror = function () { fallBack("the worker was refused"); };
+    } catch (e) {
+      usingWorker = false;
+      worker = inlineWorker();
+    }
+  }
+
   function generateWorld(seed) {
     gen.busy = true; gen.attempt = 0;
-    say("Generating a world…");
-    worker.postMessage({ n: 513, seed: seed >>> 0, maxTries: 24 });
+    gen.last = { n: 513, seed: seed >>> 0, maxTries: 24 };
+    say("Generating a world\u2026");
+    clearTimeout(watchdog);
+    if (usingWorker) {
+      // Some refusals are silent: no error event, no message, nothing at all.
+      // Give it five seconds -- generation takes a fifth of one -- then run
+      // it here instead.
+      watchdog = setTimeout(function () {
+        if (gen.busy) fallBack("no answer from the worker");
+      }, 5000);
+    }
+    worker.postMessage(gen.last);
   }
 
   function buildOverview() {
@@ -1351,7 +1399,8 @@
     putStr(2, 1, "WATERTABLE", C.ink, Z.UI);
     putStr(13, 1, mode === "world" ? "world map" : "underground", C.label, Z.UI);
 
-    var right = W ? ("seed " + (gen.seed >>> 0).toString(16)
+    var right = W ? ((usingWorker ? "" : "main thread   ")
+                   + "seed " + (gen.seed >>> 0).toString(16)
                    + "   " + gen.tries + (gen.tries === 1 ? " try" : " tries")
                    + "   " + gen.ms + "ms") : "";
     putStr(cols - 2 - right.length, 1, right, C.dim, Z.UI);
