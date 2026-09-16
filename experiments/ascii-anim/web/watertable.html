@@ -900,14 +900,24 @@
       return (a*(1-tx)+b*tx)*(1-ty) + (c*(1-tx)+d2*tx)*ty;
     }
 
-    var avg = 0;
+    // Relief has to be expressed in levels, not in the world's elevation
+    // scale. One world tile spans a small part of that scale, so carrying the
+    // fine detail through it gave an embark less than one z-level of relief:
+    // a plateau. One level up was empty sky, one level down was rock to the
+    // horizon, and changing level looked exactly like not changing level.
+    //
+    // So the world sets where the ground sits and the detail sets how far it
+    // moves, in levels, with mountains breaking up more than a coastal plain.
+    var avg = 0, sLo = LD, sHi = 0;
     for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
       var base = worldElev((x / w) - 0.5, (y / h) - 0.5);
       var fine = det[Math.min(D-1, (y * D / h) | 0) * D + Math.min(D-1, (x * D / w) | 0)];
-      var hh = base + (fine - 0.5) * 0.045;
-      var z = Math.round(SEA_Z + (hh - W.sea) * 20);
+      var rough = clamp((base - W.sea) / 0.30, 0, 1);
+      var z = Math.round(SEA_Z + (base - W.sea) * 20 + (fine - 0.5) * (4 + rough * 10));
       z = clamp(z, 1, LD - 3);
       surface[y * w + x] = z;
+      if (z < sLo) sLo = z;
+      if (z > sHi) sHi = z;
       avg += z;
     }
     avg = Math.round(avg / plane);
@@ -1067,6 +1077,7 @@
           springs:springs, sinks:sinks, leaking:[], leakSet:new Uint8Array(cells),
           hasAq:hasAq, aqTop:aqTop, vz:clamp(avg + 1, 1, LD - 2),
           cavCells:cavCells, cavTop:cavTop, oreCells:oreCells, gemCells:gemCells,
+          sLo:sLo, sHi:sHi,
           ticks:0, moved:0, drained:false, leak:0, dug:0,
           pressMoved:0, pressCells:0 };
     lcur.x = w >> 1; lcur.y = h >> 1;
@@ -1464,7 +1475,7 @@
   function keysLine() {
     return mode === "world"
       ? "[G] another world   [arrows/WASD] cursor   [Enter] embark here"
-      : "[,/.] level  [D] dig  [W] water  [R] pressure  [F] fill levels  [P] pause  [V] verify  [Esc] map";
+      : "[,/.] level [D] dig [W] water [R] pressure [F] levels [P] pause [V] verify [Esc] map";
   }
 
   function drawBusy() {
