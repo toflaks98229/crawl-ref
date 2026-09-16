@@ -147,50 +147,108 @@
   }
 
   // ===========================================================================
-  // Grid painting
+  // Grid painting, in layers.
+  //
+  // A cell holds one character, so two things in the same place cannot simply
+  // be drawn on top of each other. Two rules sort that out.
+  //
+  // Depth: every write carries a layer, and only lands if it is at least as
+  // high as what is already there. Call order stops mattering, so a late
+  // explosion cannot erase the frame and terrain cannot erase a foe.
+  //
+  // Compositing: effects do not write into the grid directly. They accumulate
+  // per cell, and are resolved once, afterwards, by taking the GLYPH from
+  // whatever is underneath and the COLOUR from the effect -- so the horde
+  // stays legible through a fireball while being lit by it -- and by
+  // brightening, then thickening, where several effects land on one cell. An
+  // overlap is something you can see rather than something that is lost.
   // ===========================================================================
+  var Z = { GROUND:1, ITEM:2, ACTOR:3, FX:4, NUM:5, UI:6 };
+
+  var zbuf = null;                      // layer occupying each cell
+  var fxN = null, fxG = null, fxC = null;   // effect accumulator
+
+  // colour -> its hotter neighbour, for stacked effects
+  var HOTTER = {};
+  HOTTER[16] = 13; HOTTER[13] = 15;     // lantern violet -> magenta -> white
+  HOTTER[12] = 14; HOTTER[14] = 15;     // red -> yellow -> white
+  HOTTER[11] = 15; HOTTER[10] = 11;     // cyan -> white, green -> cyan
+  HOTTER[15] = 15;
+
   var CLIP = null;
   function clip(x, y, w, h) { CLIP = { x:x, y:y, w:w, h:h }; }
   function unclip() { CLIP = null; }
-  function put(cx, cy, g, c) {
-    cx |= 0; cy |= 0;
-    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
-    if (CLIP && (cx < CLIP.x || cy < CLIP.y
-                 || cx >= CLIP.x + CLIP.w || cy >= CLIP.y + CLIP.h)) return;
-    buf[cy * cols + cx] = g << 8 | c;
+  function inClip(cx, cy) {
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return false;
+    return !CLIP || (cx >= CLIP.x && cy >= CLIP.y
+                     && cx < CLIP.x + CLIP.w && cy < CLIP.y + CLIP.h);
   }
-  function putStr(cx, cy, s, c) {
-    for (var i = 0; i < s.length; i++) {
-      var gi = GI[s.charAt(i)];
-      if (gi !== undefined) put(cx + i, cy, gi, c);
+  function put(cx, cy, g, c, z) {
+    cx |= 0; cy |= 0;
+    if (!inClip(cx, cy)) return;
+    var i = cy * cols + cx;
+    if (z < zbuf[i]) return;
+    zbuf[i] = z;
+    buf[i] = g << 8 | c;
+  }
+  // Effects land here instead, and are resolved together below.
+  function putFX(cx, cy, g, c) {
+    cx |= 0; cy |= 0;
+    if (!inClip(cx, cy)) return;
+    var i = cy * cols + cx;
+    if (zbuf[i] > Z.ACTOR) return;      // never over numbers or the interface
+    if (fxN[i] < 255) fxN[i]++;
+    fxG[i] = g;
+    fxC[i] = c;
+  }
+  function resolveFX() {
+    for (var i = 0; i < fxN.length; i++) {
+      var n = fxN[i];
+      if (!n) continue;
+      var col = fxC[i];
+      for (var k = 1; k < n && k < 3; k++) col = HOTTER[col] === undefined ? col : HOTTER[col];
+      var glyph;
+      if (zbuf[i] === Z.ACTOR) glyph = buf[i] >> 8;        // keep who it is
+      else if (n >= 5) glyph = GI["@"];
+      else if (n >= 3) glyph = GI["#"];
+      else glyph = fxG[i];
+      zbuf[i] = Z.FX;
+      buf[i] = glyph << 8 | col;
     }
   }
-  function hfill(x, y, w, ch, c) {
+
+  function putStr(cx, cy, s, c, z) {
+    for (var i = 0; i < s.length; i++) {
+      var gi = GI[s.charAt(i)];
+      if (gi !== undefined) put(cx + i, cy, gi, c, z);
+    }
+  }
+  function hfill(x, y, w, ch, c, z) {
     var gi = GI[ch];
-    for (var i = 0; i < w; i++) put(x + i, y, gi, c);
+    for (var i = 0; i < w; i++) put(x + i, y, gi, c, z);
   }
   // A framed panel, in the double line Crawl uses for CSET_DEFAULT frames.
   function panel(x, y, w, h, c) {
     for (var i = 1; i < w - 1; i++) {
-      put(x + i, y, GI["═"], c);
-      put(x + i, y + h - 1, GI["═"], c);
+      put(x + i, y, GI["═"], c, Z.UI);
+      put(x + i, y + h - 1, GI["═"], c, Z.UI);
     }
     for (var j = 1; j < h - 1; j++) {
-      put(x, y + j, GI["║"], c);
-      put(x + w - 1, y + j, GI["║"], c);
-      hfill(x + 1, y + j, w - 2, " ", c);
+      put(x, y + j, GI["║"], c, Z.UI);
+      put(x + w - 1, y + j, GI["║"], c, Z.UI);
+      hfill(x + 1, y + j, w - 2, " ", c, Z.UI);
     }
-    put(x, y, GI["╔"], c);            put(x + w - 1, y, GI["╗"], c);
-    put(x, y + h - 1, GI["╚"], c);    put(x + w - 1, y + h - 1, GI["╝"], c);
+    put(x, y, GI["╔"], c, Z.UI);         put(x + w - 1, y, GI["╗"], c, Z.UI);
+    put(x, y + h - 1, GI["╚"], c, Z.UI); put(x + w - 1, y + h - 1, GI["╝"], c, Z.UI);
   }
   // [=======-------]
   function bar(x, y, w, frac, cFull, cEmpty) {
     var inner = w - 2;
     var n = Math.max(0, Math.min(inner, Math.round(frac * inner)));
-    put(x, y, GI["["], cEmpty);
+    put(x, y, GI["["], cEmpty, Z.UI);
     for (var i = 0; i < inner; i++)
-      put(x + 1 + i, y, GI[i < n ? "=" : "-"], i < n ? cFull : cEmpty);
-    put(x + w - 1, y, GI["]"], cEmpty);
+      put(x + 1 + i, y, GI[i < n ? "=" : "-"], i < n ? cFull : cEmpty, Z.UI);
+    put(x + w - 1, y, GI["]"], cEmpty, Z.UI);
   }
 
   // ===========================================================================
@@ -213,6 +271,10 @@
     ctx.font = Math.round(CELL_H * 0.74) + "px " +
       getComputedStyle(document.body).fontFamily;
     buf = new Int32Array(cols * rows);
+    zbuf = new Uint8Array(cols * rows);
+    fxN = new Uint8Array(cols * rows);
+    fxG = new Uint8Array(cols * rows);
+    fxC = new Uint8Array(cols * rows);
     prev = new Int32Array(cols * rows).fill(-1);
     // rows: 0 frame, 1 status, 2 rule, [field], rule, hp, load, frame
     F.x = 1; F.y = 3; F.w = cols - 2; F.h = Math.max(8, rows - 7);
@@ -232,65 +294,65 @@
   function drawShell() {
     var c = C.frame;
     // outer frame
-    hfill(1, 0, cols - 2, "═", c);
-    hfill(1, rows - 1, cols - 2, "═", c);
+    hfill(1, 0, cols - 2, "═", c, Z.UI);
+    hfill(1, rows - 1, cols - 2, "═", c, Z.UI);
     for (var j = 1; j < rows - 1; j++) {
-      put(0, j, GI["║"], c);
-      put(cols - 1, j, GI["║"], c);
+      put(0, j, GI["║"], c, Z.UI);
+      put(cols - 1, j, GI["║"], c, Z.UI);
     }
-    put(0, 0, GI["╔"], c);             put(cols - 1, 0, GI["╗"], c);
-    put(0, rows - 1, GI["╚"], c);      put(cols - 1, rows - 1, GI["╝"], c);
+    put(0, 0, GI["╔"], c, Z.UI);             put(cols - 1, 0, GI["╗"], c, Z.UI);
+    put(0, rows - 1, GI["╚"], c, Z.UI);      put(cols - 1, rows - 1, GI["╝"], c, Z.UI);
     // rules above and below the field
-    hfill(1, 2, cols - 2, "═", c);
-    hfill(1, rows - 4, cols - 2, "═", c);
+    hfill(1, 2, cols - 2, "═", c, Z.UI);
+    hfill(1, rows - 4, cols - 2, "═", c, Z.UI);
 
     var s = statsOf();
     var right = cols - 2;
 
     // --- status line -------------------------------------------------------
     var x = 2;
-    putStr(x, 1, "LANTERN HOURS", C.us); x += 15;
-    if (cols > 62) { putStr(x, 1, "SURVIVED", C.label); x += 9; }
-    putStr(x, 1, mmss(t), C.ink); x += 6;
-    putStr(x, 1, "LV", C.label); x += 3;
-    putStr(x, 1, pad(you.lv, 3), C.ink); x += 3;
+    putStr(x, 1, "LANTERN HOURS", C.us, Z.UI); x += 15;
+    if (cols > 62) { putStr(x, 1, "SURVIVED", C.label, Z.UI); x += 9; }
+    putStr(x, 1, mmss(t), C.ink, Z.UI); x += 6;
+    putStr(x, 1, "LV", C.label, Z.UI); x += 3;
+    putStr(x, 1, pad(you.lv, 3), C.ink, Z.UI); x += 3;
     if (cols > 74) {
-      putStr(x, 1, "XP", C.label); x += 3;
+      putStr(x, 1, "XP", C.label, Z.UI); x += 3;
       bar(x, 1, 12, you.xp / you.need, C.xp, C.frame); x += 13;
-      putStr(x, 1, you.xp + "/" + you.need, C.dim);
+      putStr(x, 1, you.xp + "/" + you.need, C.dim, Z.UI);
     }
     var goal = "GOAL " + mmss(RUN_LENGTH);
-    putStr(right - goal.length + 1, 1, goal, C.label);
+    putStr(right - goal.length + 1, 1, goal, C.label, Z.UI);
 
     // --- vitals line -------------------------------------------------------
     var y = rows - 3;
     x = 2;
-    putStr(x, y, "HP", C.label); x += 3;
+    putStr(x, y, "HP", C.label, Z.UI); x += 3;
     bar(x, y, 18, Math.max(0, you.hp / you.maxhp), C.hurt, C.frame); x += 19;
-    putStr(x, y, Math.max(0, Math.round(you.hp)) + "/" + Math.round(you.maxhp), C.ink);
+    putStr(x, y, Math.max(0, Math.round(you.hp)) + "/" + Math.round(you.maxhp), C.ink, Z.UI);
     x += 9;
     if (cols > 68) {
-      putStr(x, y, "FOES", C.label); putStr(x + 5, y, pad(foes.length, 5), C.ink);
+      putStr(x, y, "FOES", C.label, Z.UI); putStr(x + 5, y, pad(foes.length, 5), C.ink, Z.UI);
       x += 10;
-      putStr(x, y, "KILLS", C.label); putStr(x + 6, y, pad(kills, 6), C.ink);
+      putStr(x, y, "KILLS", C.label, Z.UI); putStr(x + 6, y, pad(kills, 6), C.ink, Z.UI);
       x += 12;
     }
     if (cols > 92) {
       var perf = "fx " + fx.length + "  repaint " + stat.dirty
                + "  " + stat.ms.toFixed(1) + "ms";
-      putStr(right - perf.length + 1, y, perf, C.frame);
+      putStr(right - perf.length + 1, y, perf, C.frame, Z.UI);
     }
 
     // --- loadout line ------------------------------------------------------
     y = rows - 2;
     x = 2;
-    if (!you.arms.length) putStr(x, y, "nothing yet - walk over the sparks", C.frame);
+    if (!you.arms.length) putStr(x, y, "nothing yet - walk over the sparks", C.frame, Z.UI);
     you.arms.forEach(function (a) {
       var tag = a.def.g + " " + a.def.name + " " + a.lv;
       if (x + tag.length + 2 > right) return;
-      putStr(x, y, a.def.g, a.def.kind === "passive" ? C.xp : C.us);
-      putStr(x + 2, y, a.def.name, C.dim);
-      putStr(x + 2 + a.def.name.length + 1, y, String(a.lv), C.ink);
+      putStr(x, y, a.def.g, a.def.kind === "passive" ? C.xp : C.us, Z.UI);
+      putStr(x + 2, y, a.def.name, C.dim, Z.UI);
+      putStr(x + 2 + a.def.name.length + 1, y, String(a.lv), C.ink, Z.UI);
       x += tag.length + 3;
     });
   }
@@ -307,12 +369,13 @@
       var wx = Math.floor(L) + cx, wy = Math.floor(T / YS) + cy;
       var h = (wx * 73856093 ^ wy * 19349663) >>> 0;
       var g = (h % 23 === 0) ? GI[","] : (h % 11 === 0) ? GI["."] : 0;
-      put(F.x + cx, F.y + cy, g, (h % 23 === 0) ? C.grass : C.grass2);
+      put(F.x + cx, F.y + cy, g, (h % 23 === 0) ? C.grass : C.grass2, Z.GROUND);
     }
 
     for (var i = 0; i < gems.length; i++) {
       var gm = gems[i];
-      put(toCellX(gm.x), toCellY(gm.y), GI[gm.pull ? "*" : "."], gm.pull ? C.xp : 3);
+      put(toCellX(gm.x), toCellY(gm.y), GI[gm.pull ? "*" : "."],
+          gm.pull ? C.xp : 3, Z.ITEM);
     }
 
     for (var f = 0; f < foes.length; f++) {
@@ -329,11 +392,14 @@
       var m2 = foes[owner[k]];
       put(F.x + (k % F.w), F.y + ((k / F.w) | 0),
           n === 1 ? GI[m2.def.g] : RAMP[Math.min(4, n - 1)],
-          m2.hurt > 0 ? C.ink : m2.def.c);
+          m2.hurt > 0 ? C.ink : m2.def.c, Z.ACTOR);
     }
 
+    // the player is an actor too, so effects light him rather than erase him
+    put(toCellX(you.x), toCellY(you.y), GI["@"],
+        you.iframe > 0 ? C.ink : C.us, Z.ACTOR);
     stampFX();
-    put(toCellX(you.x), toCellY(you.y), GI["@"], you.iframe > 0 ? C.ink : C.us);
+    resolveFX();
     unclip();
   }
 
@@ -347,15 +413,15 @@
           toCellX(e.x1) - toCellX(e.x0), toCellY(e.y1) - toCellY(e.y0))));
         for (j = 0; j <= n; j++) {
           if (j / n > p + 0.42) break;
-          put(toCellX(e.x0) + (toCellX(e.x1) - toCellX(e.x0)) * j / n,
+          putFX(toCellX(e.x0) + (toCellX(e.x1) - toCellX(e.x0)) * j / n,
               toCellY(e.y0) + (toCellY(e.y1) - toCellY(e.y0)) * j / n, GI[e.g], e.c);
         }
       } else if (e.k === "ring") {
         var rr = e.r * p;
         for (j = 0; j < 44; j++) {
           var th = j / 44 * Math.PI * 2;
-          put(toCellX(e.x + Math.cos(th) * rr), toCellY(e.y + Math.sin(th) * rr),
-              GI[e.g], e.c);
+          putFX(toCellX(e.x + Math.cos(th) * rr), toCellY(e.y + Math.sin(th) * rr),
+                GI[e.g], e.c);
         }
       } else if (e.k === "burst") {
         var band = e.r * p;
@@ -363,21 +429,21 @@
           for (var dx = -e.r; dx <= e.r; dx += 0.5) {
             var d = Math.hypot(dx, dy);
             if (d > band || d < band - 1.4) continue;
-            put(toCellX(e.x + dx), toCellY(e.y + dy), GI["#"], e.c);
+            putFX(toCellX(e.x + dx), toCellY(e.y + dy), GI["#"], e.c);
           }
       } else if (e.k === "wave") {
         var lo = e.r * p, hi = lo + 2.4;
         for (var a = 0; a < 190; a++) {
           var an = a / 190 * Math.PI * 2, rad = lo + Math.random() * (hi - lo);
-          put(toCellX(e.x + Math.cos(an) * rad), toCellY(e.y + Math.sin(an) * rad),
-              GI["*"], e.c);
+          putFX(toCellX(e.x + Math.cos(an) * rad), toCellY(e.y + Math.sin(an) * rad),
+                GI["*"], e.c);
         }
       } else if (e.k === "pop") {
         var pr = 1.6 * p;
         for (j = 0; j < 8; j++) {
           var pa = j / 8 * Math.PI * 2;
-          put(toCellX(e.x + Math.cos(pa) * pr), toCellY(e.y + Math.sin(pa) * pr),
-              GI["'"], e.c);
+          putFX(toCellX(e.x + Math.cos(pa) * pr), toCellY(e.y + Math.sin(pa) * pr),
+                GI["'"], e.c);
         }
       }
     }
@@ -387,7 +453,7 @@
       if (d2.k !== "num") continue;
       var pr2 = 1 - d2.life / d2.max;
       putStr(toCellX(d2.x) - (d2.s.length / 2 | 0),
-             toCellY(d2.y) - 1 - pr2 * 2.2, d2.s, d2.c);
+             toCellY(d2.y) - 1 - pr2 * 2.2, d2.s, d2.c, Z.NUM);
     }
   }
 
@@ -399,24 +465,24 @@
     var h = Math.min(rows - 4, 3 + offer.length * 4);
     var x = ((cols - w) / 2) | 0, y = ((rows - h) / 2) | 0;
     panel(x, y, w, h, C.us);
-    putStr(x + 3, y, " THE LANTERN BRIGHTENS ", C.us);
+    putStr(x + 3, y, " THE LANTERN BRIGHTENS ", C.us, Z.UI);
     var sub = you.arms.length >= MAX_SLOTS
       ? "hands full - only what you carry can grow"
       : "take one";
-    putStr(x + w - sub.length - 4, y + 1, sub, C.frame);
-    putStr(x + 3, y + 1, "level " + you.lv, C.label);
+    putStr(x + w - sub.length - 4, y + 1, sub, C.frame, Z.UI);
+    putStr(x + 3, y + 1, "level " + you.lv, C.label, Z.UI);
 
     hitRects = [];
     var ry = y + 3;
     offer.forEach(function (d, i) {
       var have = you.arms.filter(function (a) { return a.def.id === d.id; })[0];
-      putStr(x + 3, ry, "[" + (i + 1) + "]", C.us);
-      putStr(x + 7, ry, d.g, C.gold);
-      putStr(x + 9, ry, d.name, C.ink);
+      putStr(x + 3, ry, "[" + (i + 1) + "]", C.us, Z.UI);
+      putStr(x + 7, ry, d.g, C.gold, Z.UI);
+      putStr(x + 9, ry, d.name, C.ink, Z.UI);
       var lv = have ? "lv " + have.lv + " -> " + (have.lv + 1) : "new";
-      putStr(x + w - lv.length - 3, ry, lv, C.label);
-      putStr(x + 7, ry + 1, d.desc.slice(0, w - 11), C.dim);
-      if (d.src) putStr(x + 7, ry + 2, d.src.slice(0, w - 11), C.frame);
+      putStr(x + w - lv.length - 3, ry, lv, C.label, Z.UI);
+      putStr(x + 7, ry + 1, d.desc.slice(0, w - 11), C.dim, Z.UI);
+      if (d.src) putStr(x + 7, ry + 2, d.src.slice(0, w - 11), C.frame, Z.UI);
       hitRects.push({ x:x + 1, y:ry, w:w - 2, h:3, i:i });
       ry += 4;
     });
@@ -428,7 +494,7 @@
     var win = over_ === "won";
     panel(x, y, w, h, win ? C.us : C.hurt);
     var title = win ? " DAWN " : " THE LANTERN GOES OUT ";
-    putStr(x + ((w - title.length) / 2 | 0), y, title, win ? C.us : C.hurt);
+    putStr(x + ((w - title.length) / 2 | 0), y, title, win ? C.us : C.hurt, Z.UI);
     var rowsOut = [
       "survived   " + mmss(t) + " of " + mmss(RUN_LENGTH),
       "put down   " + kills,
@@ -437,9 +503,9 @@
         || "nothing")
     ];
     rowsOut.forEach(function (s, i) {
-      putStr(x + 4, y + 2 + i, s.slice(0, w - 8), i === 0 ? C.ink : C.dim);
+      putStr(x + 4, y + 2 + i, s.slice(0, w - 8), i === 0 ? C.ink : C.dim, Z.UI);
     });
-    putStr(x + 4, y + h - 2, "press R to walk out again", C.us);
+    putStr(x + 4, y + h - 2, "press R to walk out again", C.us, Z.UI);
   }
 
   // ===========================================================================
@@ -448,6 +514,8 @@
   function render() {
     var t0 = performance.now();
     buf.fill(0);
+    zbuf.fill(0);
+    fxN.fill(0);
     drawField();
     drawShell();
     if (paused && offer) drawLevelUp();

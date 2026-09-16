@@ -74,3 +74,28 @@ design has.
 
 Keep a visually hidden heading, a key summary, and an `aria-live` status line
 in the markup. A canvas says nothing to a screen reader on its own.
+
+## Effects: layers, not draw order
+
+A cell holds one character, so overlapping effects cannot simply be painted on
+top of each other. Two rules handle it, and both live in `horde.html`.
+
+**Every write carries a layer.** `put` / `putStr` / `hfill` take a `Z` value
+(`GROUND`, `ITEM`, `ACTOR`, `FX`, `NUM`, `UI`) and only land if they are at
+least as high as what already occupies the cell. Call order stops mattering:
+a late explosion cannot erase the frame, and terrain cannot erase a foe. A
+draw call without a layer is a bug.
+
+**Effects composite rather than overwrite.** They go through `putFX`, which
+accumulates per cell instead of writing, and `resolveFX` settles them once
+afterwards:
+
+- over an actor, keep the actor's GLYPH and take the effect's COLOUR, so the
+  horde stays legible through a fireball while being lit by it;
+- over anything else, use the effect's own glyph;
+- with several effects on one cell, climb the `HOTTER` colour chain and, past
+  three and five, thicken the glyph to `#` then `@`.
+
+An overlap is then something you can see, rather than something that is lost.
+Damage numbers sit on their own layer above the effects so nothing eats a
+digit.
