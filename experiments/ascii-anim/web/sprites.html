@@ -1,0 +1,527 @@
+<title>Three Cells Wide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* Committed single-theme: the same dungeon terminal as the game this is a
+     study for. It paints its own ground, so it holds on either host theme. */
+  :root {
+    --ground:  #0a0907;
+    --panel:   #14120f;
+    --panel-2: #1b1813;
+    --line:    #2b261f;
+    --line-lit:#413a2f;
+    --ink:     #ccc4b4;
+    --dim:     #8a8071;
+    --faint:   #57503f;
+    --accent:  #55ffff;
+    --warn:    #ffc14d;
+    --bad:     #ff6b5e;
+
+    /* the cell, from CLAUDE.md: 1 wide, 2 tall */
+    --cell-w: 15px;
+    --cell-ratio: 2;
+    --cell-h: calc(var(--cell-w) * var(--cell-ratio));
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .wrap {
+    max-width: 1000px; margin: 0 auto;
+    padding-inline: 20px; padding-block: 30px 56px;
+    display: flex; flex-direction: column; gap: 30px;
+  }
+
+  h1 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: clamp(28px, 5.5vw, 42px); line-height: 1;
+    margin: 0; text-wrap: balance;
+  }
+  .eyebrow {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+  }
+  .lede { margin: 0; max-width: 66ch; color: var(--dim); }
+  .lede b { color: var(--ink); font-weight: 400; }
+
+  h2 {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .15em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 12px;
+  }
+  section { display: flex; flex-direction: column; }
+
+  /* ---------------- the cell grid ---------------- */
+
+  .fig {
+    display: grid;
+    grid-auto-rows: var(--cell-h);
+    background: #050403;
+    width: max-content;
+  }
+  .cl {
+    width: var(--cell-w); height: var(--cell-h);
+    overflow: hidden; display: block; position: relative;
+  }
+  .cl > .g {
+    display: block; width: 100%;
+    font-size: calc(var(--cell-h) * .74);
+    line-height: var(--cell-h);
+    text-align: center; white-space: pre;
+    transform-origin: 50% 50%;
+  }
+  .cl.wall > .g { color: #4a4336; }
+  .cl.floor > .g { color: #3b352b; }
+  .cl.body > .g { color: #ccc4b4; }
+  .cl.edge > .g { color: var(--accent); }
+
+  /* ---------------- specimens ---------------- */
+
+  .rack {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .spec {
+    background: var(--panel); padding: 14px 12px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 9px;
+    cursor: pointer; border: 0; font: inherit; color: inherit; text-align: center;
+  }
+  .spec:hover { background: var(--panel-2); }
+  .spec[aria-pressed="true"] { background: #101d1d; }
+  .spec[aria-pressed="true"] .nm { color: var(--accent); }
+  .spec:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .spec .nm { font-family: var(--cond); font-weight: 700; font-size: 14px;
+              letter-spacing: .04em; }
+  .spec .rd { color: var(--faint); font-size: 10.5px; line-height: 1.35; }
+
+  /* ---------------- sheet ---------------- */
+
+  .sheet { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  .frame { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .frame .lb { font-size: 10px; color: var(--faint); letter-spacing: .08em;
+               text-transform: uppercase; font-family: var(--cond); font-weight: 700; }
+  .frame.now .lb { color: var(--accent); }
+  .frame.now .fig { outline: 1px solid var(--accent); }
+
+  /* ---------------- corridor test ---------------- */
+
+  .fits { display: flex; gap: 22px; flex-wrap: wrap; }
+  .fit { display: flex; flex-direction: column; gap: 7px; }
+  .fit .cap { font-size: 11px; color: var(--dim); }
+  .fit .cap b { color: var(--ink); font-weight: 400; }
+  .fit .cap.bad b { color: var(--bad); }
+  .fit .cap.ok b { color: var(--warn); }
+  .fit .cap.good b { color: var(--accent); }
+
+  /* ---------------- controls + facts ---------------- */
+
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button.ui {
+    font: inherit; font-size: 11px; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 2px; padding: 5px 10px; cursor: pointer;
+  }
+  button.ui:hover { border-color: var(--line-lit); }
+  button.ui[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button.ui:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .phase { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .facts {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .facts div { background: var(--panel); padding: 11px 13px;
+               display: flex; flex-direction: column; gap: 3px; }
+  .facts dt { color: var(--faint); font-size: 10px; letter-spacing: .13em;
+              text-transform: uppercase; font-family: var(--cond); font-weight: 700; }
+  .facts dd { margin: 0; font-size: 12.5px; }
+  .facts dd b { color: var(--accent); font-weight: 400; }
+
+  .notes { margin: 0; padding-left: 1.1em; color: var(--dim); max-width: 74ch; }
+  .notes li { margin-bottom: 7px; }
+  .notes b { color: var(--ink); font-weight: 400; }
+  .notes code { color: var(--accent); font-size: 12px; }
+
+  @media (prefers-reduced-motion: reduce) { .fig { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:11px">
+    <div class="eyebrow">Sprite study &middot; one logical cell, nine cells of paint</div>
+    <h1>Three Cells Wide</h1>
+    <p class="lede">
+      Crawl already draws some creatures bigger than the square they stand on:
+      the standard tile is 32&times;32, but uniques get <b>32&times;48</b>
+      (<code>rltiles/dc-mon.txt:6</code>) and nothing about the rules changes.
+      A 3&times;3 delver works the same way &mdash; the anchor cell is still the
+      one the game reasons about. What changes is that the cell is
+      <b>1 wide and 2 tall</b>, so three cells across is six tall: these figures
+      are drawn at the proportion they will actually have.
+    </p>
+  </header>
+
+  <section>
+    <h2>Specimens</h2>
+    <div class="rack" id="rack"></div>
+  </section>
+
+  <section>
+    <h2>Walk cycle &mdash; the sprite sheet</h2>
+    <div class="bar" style="margin-bottom:14px">
+      <button class="ui" id="play" aria-pressed="true">&#9208; Pause</button>
+      <button class="ui" id="sl" aria-pressed="false">Slow</button>
+      <button class="ui" id="step">Step &rsaquo;</button>
+      <span class="phase" id="phase"></span>
+    </div>
+    <div class="sheet" id="sheet"></div>
+  </section>
+
+  <section>
+    <h2>Does it fit the dungeon?</h2>
+    <div class="fits" id="fits"></div>
+  </section>
+
+  <section>
+    <h2>What it costs</h2>
+    <dl class="facts" id="facts"></dl>
+  </section>
+
+  <section>
+    <h2>Consequences</h2>
+    <ul class="notes">
+      <li><b>Keep the anchor one cell.</b> Occupancy, line of sight, reach and
+      cleave all read a single coordinate. Make the sprite a rendering concern
+      and <code>get_cleave_targets</code> keeps working unchanged; make it nine
+      real cells and every rule needs rewriting.</li>
+      <li><b>The walk cycle is the energy bar.</b> One step costs 10 auts, so
+      drive the cycle phase from the fill toward 80 rather than from wall time.
+      The figure then finishes its stride exactly as the step lands, at any
+      clock rate.</li>
+      <li><b>A one-cell corridor cannot hold a three-cell body.</b> Either the
+      level generator works at 3&times; scale &mdash; corridors three wide,
+      which triples the map to roughly 200&times;70 cells &mdash; or the big
+      sprite is reserved for open ground and the figure drops to one glyph in
+      tight spaces, the way zoom already swaps detail in the battle game.</li>
+      <li><b>Scale is a statement about rank.</b> Crawl gives the big tiles to
+      uniques only. If everything is 3&times;3 the size stops meaning anything,
+      and 683 monsters would each need a design.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // One glyph, one cell -- the minimal form of cellgrid.js, kept so a wide
+  // glyph dropped into a design still occupies exactly one cell.
+  var mctx = document.createElement("canvas").getContext("2d");
+  var fitCache = new Map(), unit = 0, fitReady = false;
+  function useFont(sample) {
+    var cs = getComputedStyle(sample);
+    mctx.font = cs.fontSize + " " + cs.fontFamily;
+    unit = mctx.measureText("M").width || 1;
+    fitCache.clear();
+    fitReady = true;
+  }
+  function paint(span, ch) {
+    span.textContent = ch;
+    if (!fitReady || ch === " ") { span.style.transform = ""; return; }
+    var s = fitCache.get(ch);
+    if (s === undefined) {
+      var w = mctx.measureText(ch).width;
+      s = w > unit * 1.02 ? unit / w : 1;
+      fitCache.set(ch, s);
+    }
+    span.style.transform = s === 1 ? "" : "scaleX(" + s.toFixed(4) + ")";
+  }
+
+  // =========================================================================
+  // The specimens. Each frame is three rows of exactly three characters, and
+  // the order is the stride: plant, lift, pass, reach.
+  // =========================================================================
+  var SPECS = [
+    { id: "delver", name: "Delver",
+      read: "the plain stick. Reads instantly, carries no rank.",
+      frames: [
+        [" o ", "/|\\", "/ \\"],
+        [" o ", "-|\\", " |\\"],
+        [" o ", "/|\\", " | "],
+        [" o ", "/|-", "/| "]
+      ] },
+    { id: "warden", name: "Warden",
+      read: "pauldrons and a breastplate. Heaviest silhouette here.",
+      frames: [
+        ["[o]", "/#\\", "/ \\"],
+        ["[o]", "|#\\", " |\\"],
+        ["[o]", "|#|", " | "],
+        ["[o]", "/#|", "/| "]
+      ] },
+    { id: "adept", name: "Adept",
+      read: "no legs, a moving hem. Robes solve the walk cycle cheaply.",
+      frames: [
+        [" o ", "\\|/", "/#\\"],
+        [" o ", "\\|/", "(#)"],
+        [" o ", "\\|/", "\\#/"],
+        [" o ", "\\|/", "(#)"]
+      ] },
+    { id: "reaver", name: "Reaver",
+      read: "weapon lives in the arm row. Changes with what you wield.",
+      frames: [
+        [" o(", "/|\\", "/ \\"],
+        [" o(", "-|\\", " |\\"],
+        [" o(", "/|\\", " | "],
+        [" o(", "/|-", "/| "]
+      ] },
+    { id: "stalker", name: "Stalker",
+      read: "crouched into two rows. Smaller read, still three wide.",
+      frames: [
+        ["   ", " o ", "/|\\"],
+        ["   ", " o-", " |\\"],
+        ["   ", " o ", "/|\\"],
+        ["   ", "-o ", "/| "]
+      ] },
+    { id: "colossus", name: "Colossus",
+      read: "box-drawing mass. Legible, but stops reading as a person.",
+      frames: [
+        ["\u2554o\u2557", "\u2551#\u2551", "\u255a \u255d"],
+        ["\u2554o\u2557", "\u2551#\u2551", " \u2551\u255d"],
+        ["\u2554o\u2557", "\u2551#\u2551", " \u2551 "],
+        ["\u2554o\u2557", "\u2551#\u2551", "\u255a\u2551 "]
+      ] }
+  ];
+  var pick = 0, phase = 0, playing = true, slow = false;
+
+  // =========================================================================
+  // Drawing
+  // =========================================================================
+  function makeFig(w, h) {
+    var el = document.createElement("div");
+    el.className = "fig";
+    el.style.gridTemplateColumns = "repeat(" + w + ", var(--cell-w))";
+    var cells = [];
+    for (var i = 0; i < w * h; i++) {
+      var c = document.createElement("span");
+      c.className = "cl";
+      var g = document.createElement("span");
+      g.className = "g";
+      c.appendChild(g);
+      el.appendChild(c);
+      cells.push({ cell: c, g: g });
+    }
+    return { el: el, cells: cells, w: w, h: h };
+  }
+  function drawFig(fig, rows, cls) {
+    for (var y = 0; y < fig.h; y++) for (var x = 0; x < fig.w; x++) {
+      var ch = (rows[y] || "   ").charAt(x) || " ";
+      var o = fig.cells[y * fig.w + x];
+      paint(o.g, ch);
+      o.cell.className = "cl " + (ch === " " ? "" : (cls || "body"));
+    }
+  }
+
+  // ---- specimen rack ------------------------------------------------------
+  var rackFigs = [];
+  function buildRack() {
+    var rack = document.getElementById("rack");
+    rack.innerHTML = "";
+    rackFigs = [];
+    SPECS.forEach(function (s, i) {
+      var b = document.createElement("button");
+      b.className = "spec";
+      b.setAttribute("aria-pressed", String(i === pick));
+      var fig = makeFig(3, 3);
+      b.appendChild(fig.el);
+      var nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = s.name;
+      var rd = document.createElement("span");
+      rd.className = "rd";
+      rd.textContent = s.read;
+      b.appendChild(nm);
+      b.appendChild(rd);
+      b.addEventListener("click", function () {
+        pick = i;
+        b.blur();
+        buildRack(); buildSheet(); buildFits(); buildFacts();
+      });
+      rack.appendChild(b);
+      rackFigs.push(fig);
+    });
+  }
+
+  // ---- sprite sheet -------------------------------------------------------
+  var sheetFigs = [];
+  var LABELS = ["plant", "lift", "pass", "reach"];
+  function buildSheet() {
+    var sheet = document.getElementById("sheet");
+    sheet.innerHTML = "";
+    sheetFigs = [];
+    SPECS[pick].frames.forEach(function (f, i) {
+      var d = document.createElement("div");
+      d.className = "frame";
+      var fig = makeFig(3, 3);
+      var lb = document.createElement("span");
+      lb.className = "lb";
+      lb.textContent = (i + 1) + " " + LABELS[i];
+      d.appendChild(fig.el);
+      d.appendChild(lb);
+      sheet.appendChild(d);
+      drawFig(fig, f);
+      sheetFigs.push({ box: d, fig: fig });
+    });
+  }
+
+  // ---- corridor fit -------------------------------------------------------
+  var fitDefs = [
+    { w: 1, cap: "one-cell corridor", cls: "bad",
+      note: "the body is cut to a sliver" },
+    { w: 3, cap: "three-cell corridor", cls: "ok",
+      note: "exact fit, no room to sidestep" },
+    { w: 5, cap: "five-cell corridor", cls: "good",
+      note: "room to move and to read the stride" }
+  ];
+  var fitFigs = [];
+  function buildFits() {
+    var box = document.getElementById("fits");
+    box.innerHTML = "";
+    fitFigs = [];
+    fitDefs.forEach(function (d) {
+      var wrapEl = document.createElement("div");
+      wrapEl.className = "fit";
+      var total = d.w + 4;
+      var fig = makeFig(total, 5);
+      var cap = document.createElement("span");
+      cap.className = "cap " + d.cls;
+      cap.innerHTML = "<b>" + d.cap + "</b> &mdash; " + d.note;
+      wrapEl.appendChild(fig.el);
+      wrapEl.appendChild(cap);
+      box.appendChild(wrapEl);
+      fitFigs.push({ fig: fig, def: d, total: total });
+    });
+  }
+  function drawFits() {
+    var frames = SPECS[pick].frames;
+    var f = frames[phase % frames.length];
+    fitFigs.forEach(function (o) {
+      var d = o.def, total = o.total;
+      var left = Math.floor((total - d.w) / 2);
+      var bodyLeft = Math.floor((total - 3) / 2);
+      for (var y = 0; y < 5; y++) for (var x = 0; x < total; x++) {
+        var cell = o.fig.cells[y * total + x];
+        var inFloor = x >= left && x < left + d.w;
+        var ch, cls;
+        if (!inFloor) { ch = "#"; cls = "wall"; }
+        else { ch = "."; cls = "floor"; }
+        // the body sits in the middle three rows
+        if (y >= 1 && y <= 3) {
+          var bx = x - bodyLeft;
+          if (bx >= 0 && bx < 3) {
+            var bch = f[y - 1].charAt(bx);
+            if (bch !== " ") {
+              // a body cell outside the floor is the clipping problem
+              ch = bch;
+              cls = inFloor ? "body" : "edge";
+            }
+          }
+        }
+        paint(cell.g, ch);
+        cell.cell.className = "cl " + cls;
+      }
+    });
+  }
+
+  // ---- facts --------------------------------------------------------------
+  function buildFacts() {
+    var CELL_W = 11, CELL_H = 22;   // delve.html's cell
+    var el = document.getElementById("facts");
+    el.innerHTML = [
+      ["Figure size", "3 &times; 3 cells = <b>" + (3 * CELL_W) + " &times; "
+        + (3 * CELL_H) + " px</b>, an aspect of 1:2"],
+      ["Stride budget", "one step is 10 auts; at 20 aut/s that is <b>500 ms</b>"],
+      ["Frames per step", "4 poses at <b>125 ms</b> each, phase driven by energy"],
+      ["Map cost at 3&times;", "68&times;23 becomes <b>~204&times;69</b> = 14k cells, "
+        + "well inside the 60k the dirty-cell renderer holds at 60fps"],
+      ["Crawl's precedent", "standard tile 32&times;32, uniques <b>32&times;48</b>"],
+      ["Glyphs per design", "9 cells &times; 4 frames = <b>36</b> characters"],
+      ["Anchor", "the centre cell. Everything the rules read &mdash; "
+        + "occupancy, LOS, reach &mdash; stays <b>one coordinate</b>"],
+      ["The jump", "the sprite still moves a whole cell at once: <b>11 px</b>, "
+        + "a third of its own width, which the stride has to sell"]
+    ].map(function (r) {
+      return "<div><dt>" + r[0] + "</dt><dd>" + r[1] + "</dd></div>";
+    }).join("");
+  }
+
+  // =========================================================================
+  // Loop
+  // =========================================================================
+  function tick() {
+    var frames = SPECS[pick].frames;
+    var f = frames[phase % frames.length];
+    rackFigs.forEach(function (fig, i) {
+      var fr = SPECS[i].frames;
+      drawFig(fig, fr[phase % fr.length]);
+    });
+    sheetFigs.forEach(function (o, i) {
+      o.box.classList.toggle("now", i === phase % frames.length);
+    });
+    drawFits();
+    var pct = Math.round((phase % frames.length) / frames.length * 100);
+    document.getElementById("phase").textContent =
+      "pose " + ((phase % frames.length) + 1) + " of " + frames.length
+      + "  \u00b7  energy " + (70 + pct / 10).toFixed(1) + " / 80";
+  }
+
+  var last = 0, acc = 0;
+  function loop(now) {
+    var dt = (now - last) / 1000 || 0;
+    last = now;
+    if (playing) {
+      acc += dt;
+      var step = slow ? 0.42 : 0.125;
+      while (acc >= step) { acc -= step; phase++; tick(); }
+    }
+    requestAnimationFrame(loop);
+  }
+
+  document.getElementById("play").addEventListener("click", function () {
+    playing = !playing;
+    this.setAttribute("aria-pressed", String(playing));
+    this.innerHTML = playing ? "\u23F8 Pause" : "\u25B6 Play";
+    this.blur();
+  });
+  document.getElementById("sl").addEventListener("click", function () {
+    slow = !slow;
+    this.setAttribute("aria-pressed", String(slow));
+    this.blur();
+  });
+  document.getElementById("step").addEventListener("click", function () {
+    playing = false;
+    document.getElementById("play").setAttribute("aria-pressed", "false");
+    document.getElementById("play").innerHTML = "\u25B6 Play";
+    phase++; tick(); this.blur();
+  });
+
+  buildRack(); buildSheet(); buildFits(); buildFacts();
+  useFont(document.querySelector(".cl > .g"));
+  tick();
+  if (document.fonts && document.fonts.ready)
+    document.fonts.ready.then(function () {
+      useFont(document.querySelector(".cl > .g"));
+      tick();
+    });
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(loop); });
+})();
+</script>
