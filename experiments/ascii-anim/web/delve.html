@@ -1,0 +1,835 @@
+<title>Aut Clock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* A committed single-theme page: a dungeon terminal. It paints its own
+     ground, so it holds on either host theme. */
+  :root {
+    --ground:  #0a0907;
+    --panel:   #14120f;
+    --panel-2: #1b1813;
+    --line:    #2b261f;
+    --line-lit:#413a2f;
+    --ink:     #ccc4b4;
+    --dim:     #8a8071;
+    --faint:   #57503f;
+    --accent:  #55ffff;   /* Crawl LIGHTCYAN */
+    --danger:  #ff5555;
+    --warn:    #ffff55;
+
+    /* CGA 16, in the order of enum COLOURS (defines.h:202). */
+    --c0:#000000; --c1:#3b4cc0; --c2:#00aa00; --c3:#00aaaa;
+    --c4:#aa0000; --c5:#aa00aa; --c6:#aa5500; --c7:#aaaaaa;
+    --c8:#555555; --c9:#5555ff; --c10:#55ff55; --c11:#55ffff;
+    --c12:#ff5555; --c13:#ff55ff; --c14:#ffff55; --c15:#ffffff;
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+  }
+
+  .app {
+    height: 100%;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: 1fr 268px;
+    grid-template-areas: "head head" "view rail" "log  rail";
+    gap: 10px;
+    padding-inline: 12px;
+    padding-block: 9px 12px;
+    box-sizing: border-box;
+  }
+
+  /* ---------------- head ---------------- */
+
+  .head {
+    grid-area: head;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  .head h1 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: 17px; letter-spacing: .02em; margin: 0; color: var(--ink);
+  }
+  .head .thesis { margin: 0; color: var(--dim); font-size: 11.5px; }
+  .head .thesis b { color: var(--ink); font-weight: 400; }
+  .head .spacer { flex: 1; }
+
+  /* ---------------- dungeon ---------------- */
+
+  .view {
+    grid-area: view;
+    position: relative;
+    background: #050403;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    min-height: 0;
+  }
+  .view canvas { position: absolute; inset: 0; display: block; }
+
+  .curtain {
+    position: absolute; inset: 0;
+    display: grid; place-content: center; gap: 10px; text-align: center;
+    background: rgba(5,4,3,.9); padding: 20px;
+  }
+  .curtain[hidden] { display: none !important; }
+  .curtain h2 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: 30px; margin: 0; letter-spacing: -.01em;
+  }
+  .curtain p { margin: 0; color: var(--dim); max-width: 46ch; }
+  .curtain .keys { color: var(--faint); font-size: 11.5px; }
+
+  /* ---------------- message log, Crawl's own bottom strip ---------------- */
+
+  .log {
+    grid-area: log;
+    height: 5.6em; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 5px 9px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .log p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log .old { color: var(--faint); }
+  .log .hit { color: var(--ink); }
+  .log .hurt { color: var(--danger); }
+  .log .good { color: var(--c10); }
+  .log .note { color: var(--dim); }
+
+  /* ---------------- rail ---------------- */
+
+  .rail {
+    grid-area: rail;
+    display: flex; flex-direction: column; gap: 9px; min-height: 0;
+  }
+  .mod {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .mod h2 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--faint); margin: 0;
+  }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; font-size: 12px; }
+  .stats dt { color: var(--faint); }
+  .stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .hpbar { height: 4px; background: #0c0a08; border: 1px solid var(--line); }
+  .hpbar i { display: block; height: 100%; background: var(--c10); transition: width .12s linear; }
+  .hpbar.low i { background: var(--danger); }
+
+  /* the ledger: Crawl's energy system, visible */
+  .ledger { flex: 1; min-height: 0; overflow-y: auto; gap: 4px; }
+  .act {
+    display: grid; grid-template-columns: 1.2em 1fr auto; gap: 7px;
+    align-items: center; font-size: 11.5px;
+  }
+  .act .g { text-align: center; font-weight: 600; }
+  .act .nm { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act .sp { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .act .en { grid-column: 1 / -1; height: 3px; background: #0c0a08; position: relative; }
+  .act .en i { display: block; height: 100%; background: var(--faint); }
+  .act .en.ready i { background: var(--warn); }
+  .act.me .nm { color: var(--accent); }
+  .act.me .en i { background: var(--accent); }
+  .ledger .none { color: var(--faint); font-size: 11.5px; }
+
+  .ctl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  button {
+    font: inherit; font-size: 11px;
+    color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 5px 4px; cursor: pointer;
+  }
+  button:hover { border-color: var(--line-lit); }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .keyhelp { font-size: 10.5px; color: var(--faint); }
+  .keyhelp b { color: var(--dim); font-weight: 400; }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; grid-template-areas: "head" "view" "log" "rail"; }
+    .rail { flex-direction: row; flex-wrap: wrap; }
+    .rail .mod { flex: 1 1 200px; }
+    .ledger { max-height: 150px; }
+  }
+</style>
+
+<div class="app">
+  <header class="head">
+    <h1>Aut Clock</h1>
+    <p class="thesis">
+      Stone Soup's rules, with the turn scheduler taken out. Monsters already
+      gain <b>speed &times; time / 10</b> energy and act at <b>80</b> &mdash;
+      the turn was only ever a way to advance that clock.
+      Here the wall clock advances it instead.
+    </p>
+    <span class="spacer"></span>
+  </header>
+
+  <div class="view" id="view">
+    <canvas id="screen"></canvas>
+    <div class="curtain" id="curtain" hidden>
+      <h2 id="curtain-h"></h2>
+      <p id="curtain-p"></p>
+      <p class="keys" id="curtain-k"></p>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <div class="rail">
+    <section class="mod">
+      <h2>Delver</h2>
+      <div class="hpbar" id="hpbar"><i style="width:100%"></i></div>
+      <dl class="stats">
+        <dt>HP</dt><dd id="s-hp"></dd>
+        <dt>AC</dt><dd id="s-ac"></dd>
+        <dt>EV</dt><dd id="s-ev"></dd>
+        <dt>Speed</dt><dd id="s-sp"></dd>
+        <dt>Depth</dt><dd id="s-d"></dd>
+        <dt>Auts</dt><dd id="s-aut"></dd>
+      </dl>
+    </section>
+
+    <section class="mod ledger" id="ledger-box">
+      <h2>Energy &mdash; acts at 80</h2>
+      <div id="ledger"></div>
+    </section>
+
+    <section class="mod">
+      <h2>Clock rate</h2>
+      <div class="ctl">
+        <button id="r10" aria-pressed="false">10 aut/s</button>
+        <button id="r20" aria-pressed="true">20 aut/s</button>
+        <button id="r40" aria-pressed="false">40 aut/s</button>
+      </div>
+      <p class="keyhelp">
+        <b>WASD</b> or arrows to walk, hold to keep walking. Walk into something
+        to hit it. <b>.</b> holds ground, <b>&gt;</b> takes the stairs,
+        <b>R</b> starts over.
+      </p>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ===========================================================================
+  // Crawl's own constants. Sources are named so each one can be checked.
+  // ===========================================================================
+  var BASELINE_DELAY = 10;          // defines.h:149  -- one normal action
+  var ENERGY_THRESHOLD = 80;        // monster.cc:5423 -- an actor acts at this
+  var MIN_HIT_MISS_PERCENTAGE = 5;  // defines.h:147  -- forced hit/miss floor
+  var LOS_RADIUS = 7;               // Crawl's default line of sight
+
+  // Console character cell, 1 wide by 2 tall (CLAUDE.md).
+  var CELL_W = 11, CELL_H = 22;
+  var MAP_W = 68, MAP_H = 23;
+
+  var PAL = ["#000000","#3b4cc0","#00aa00","#00aaaa","#aa0000","#aa00aa",
+             "#aa5500","#aaaaaa","#555555","#5555ff","#55ff55","#55ffff",
+             "#ff5555","#ff55ff","#ffff55","#ffffff",
+             "#3a352c","#211e19"];   // 16 remembered wall, 17 remembered floor
+  var COL = { black:0, blue:1, green:2, cyan:3, red:4, magenta:5, brown:6,
+              lightgray:7, lightgrey:7, darkgray:8, darkgrey:8, lightblue:9,
+              lightgreen:10, lightcyan:11, lightred:12, lightmagenta:13,
+              yellow:14, white:15 };
+
+  var GLYPHS = (" .,'\"`:;*#@%^~=-+|/\\_<>()[]!?$0123456789"
+    + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    + "ğ·═║╔╗╚╝"
+    + "─│┌┐└┘").split("");
+  var GI = {};
+  GLYPHS.forEach(function (g, i) { if (GI[g] === undefined) GI[g] = i; });
+
+  // ===========================================================================
+  // Monsters, copied out of dat/mons/*.yaml. hp10 is avg_hp_10x.
+  // ===========================================================================
+  var MONS = [
+    { id:"rat",       g:"r", c:"brown",      hd:1, hp10:25,  ac:1, ev:10, sp:10, dam:3,  atk:"bite", depth:[1,2] },
+    { id:"frilled lizard", g:"l", c:"green", hd:1, hp10:20,  ac:0, ev:15, sp:10, dam:3,  atk:"bite", depth:[1,2] },
+    { id:"bat",       g:"b", c:"lightgray",  hd:1, hp10:35,  ac:1, ev:14, sp:30, dam:1,  atk:"hit",  depth:[1,3] },
+    { id:"kobold",    g:"K", c:"brown",      hd:1, hp10:35,  ac:2, ev:12, sp:10, dam:1,  atk:"hit",  depth:[1,2] },
+    { id:"goblin",    g:"g", c:"lightgray",  hd:1, hp10:40,  ac:0, ev:12, sp:10, dam:1,  atk:"hit",  depth:[1,2] },
+    { id:"jackal",    g:"h", c:"brown",      hd:1, hp10:55,  ac:2, ev:12, sp:14, dam:3,  atk:"bite", depth:[1,3] },
+    { id:"ball python", g:"S", c:"green",    hd:1, hp10:35,  ac:0, ev:9,  sp:12, dam:2,  atk:"bite", depth:[1,3] },
+    { id:"quokka",    g:"r", c:"white",      hd:1, hp10:55,  ac:2, ev:13, sp:12, dam:5,  atk:"bite", depth:[1,3] },
+    { id:"hobgoblin", g:"g", c:"brown",      hd:1, hp10:55,  ac:2, ev:10, sp:10, dam:5,  atk:"hit",  depth:[2,4] },
+    { id:"orc",       g:"o", c:"lightred",   hd:1, hp10:70,  ac:0, ev:10, sp:10, dam:2,  atk:"hit",  depth:[2,4] },
+    { id:"adder",     g:"S", c:"lightgreen", hd:2, hp10:110, ac:1, ev:15, sp:13, dam:4,  atk:"bite", depth:[2,4], poison:true },
+    { id:"endoplasm", g:"j", c:"lightgray",  hd:1, hp10:60,  ac:1, ev:3,  sp:10, dam:3,  atk:"hit",  depth:[2,4] },
+    { id:"gnoll",     g:"ğ", c:"yellow",hd:2, hp10:130, ac:2, ev:9,  sp:10, dam:6,  atk:"hit",  depth:[3,5] },
+    { id:"ufetubus",  g:"5", c:"lightcyan",  hd:1, hp10:90,  ac:2, ev:15, sp:15, dam:6,  atk:"hit",  depth:[3,5] },
+    { id:"hound",     g:"h", c:"yellow",     hd:3, hp10:165, ac:2, ev:13, sp:15, dam:6,  atk:"bite", depth:[3,5] },
+    { id:"orc warrior", g:"o", c:"yellow",   hd:4, hp10:280, ac:0, ev:13, sp:10, dam:12, atk:"hit",  depth:[4,5] },
+    { id:"centaur",   g:"c", c:"brown",      hd:4, hp10:220, ac:3, ev:7,  sp:15, dam:7,  atk:"hit",  depth:[4,5] },
+    // the ogre's attack costs 15 energy, not 10 (dat/mons/ogre.yaml), so it
+    // swings noticeably slower than it walks
+    { id:"ogre",      g:"O", c:"brown",      hd:5, hp10:275, ac:1, ev:6,  sp:10, dam:18, atk:"hit",  depth:[4,5], atkCost:15 }
+  ];
+
+  // ===========================================================================
+  // Crawl's dice
+  // ===========================================================================
+  function random2(n) { return n <= 0 ? 0 : Math.floor(Math.random() * n); }
+  function divRandRound(num, den) {
+    var q = Math.floor(num / den), r = num - q * den;
+    return q + (random2(den) < r ? 1 : 0);
+  }
+  function random2avg(n, rolls) {            // mon-util.cc / random.cc
+    var sum = random2(n);
+    for (var i = 0; i < rolls - 1; i++) sum += random2(n + 1);
+    return Math.floor(sum / rolls);
+  }
+  function xChanceInY(x, y) { return random2(y) < x; }
+
+  // mon-util.cc:2336 hit_points(avg_hp, scale)
+  function hitPoints(avgHp10) {
+    var variance = divRandRound(avgHp10 * 33, 100);
+    var min = avgHp10 - variance;
+    var hp = min + random2avg(variance * 2, 8);
+    return Math.max(1, divRandRound(hp, 10));
+  }
+  // fight.cc:239 mon_to_hit_base(hd, skilled)
+  function monToHitBase(hd, skilled) {
+    return 18 + Math.floor(hd * (skilled ? 5 : 3) / 2);
+  }
+  // attack.cc:1040 test_hit -- margin >= 0 is a hit
+  function testHit(toHit, ev) {
+    if (xChanceInY(MIN_HIT_MISS_PERCENTAGE, 100))
+      return random2(2) ? 1000 : -1000;
+    return toHit - ev;
+  }
+  // actor.cc:360 apply_ac, ac_type::normal
+  function applyAC(damage, ac) {
+    return Math.max(0, damage - random2(1 + Math.max(0, ac)));
+  }
+
+  // ===========================================================================
+  // State
+  // ===========================================================================
+  var cv = document.getElementById("screen"), ctx = cv.getContext("2d", { alpha: false });
+  var viewEl = document.getElementById("view");
+  var cols = 0, rows = 0, buf = null, prev = null, forceFull = true;
+  var grid, seen, vis, mons, you, depth, aut, rate = 20, dead = false, won = false;
+  var msgs = [], held = null, lastMove = 0;
+  var keys = Object.create(null);
+
+  var FLOOR = 0, WALL = 1, STAIRS = 2;
+
+  // ===========================================================================
+  // Dungeon
+  // ===========================================================================
+  function idx(x, y) { return y * MAP_W + x; }
+  function inMap(x, y) { return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H; }
+  function solid(x, y) { return !inMap(x, y) || grid[idx(x, y)] === WALL; }
+
+  function genLevel() {
+    grid = new Uint8Array(MAP_W * MAP_H).fill(WALL);
+    seen = new Uint8Array(MAP_W * MAP_H);
+    vis = new Uint8Array(MAP_W * MAP_H);
+    var rooms = [], tries = 0;
+    while (rooms.length < 9 && tries++ < 300) {
+      var w = 4 + random2(8), h = 3 + random2(4);
+      var x = 1 + random2(MAP_W - w - 2), y = 1 + random2(MAP_H - h - 2);
+      var clash = rooms.some(function (r) {
+        return x - 1 < r.x + r.w + 1 && x + w + 1 > r.x - 1
+            && y - 1 < r.y + r.h + 1 && y + h + 1 > r.y - 1;
+      });
+      if (clash) continue;
+      rooms.push({ x: x, y: y, w: w, h: h });
+      for (var j = y; j < y + h; j++) for (var i = x; i < x + w; i++)
+        grid[idx(i, j)] = FLOOR;
+    }
+    for (var k = 1; k < rooms.length; k++) {
+      var a = rooms[k - 1], b = rooms[k];
+      var ax = a.x + (a.w >> 1), ay = a.y + (a.h >> 1);
+      var bx = b.x + (b.w >> 1), by = b.y + (b.h >> 1);
+      for (var cx = Math.min(ax, bx); cx <= Math.max(ax, bx); cx++)
+        grid[idx(cx, ay)] = FLOOR;
+      for (var cy = Math.min(ay, by); cy <= Math.max(ay, by); cy++)
+        grid[idx(bx, cy)] = FLOOR;
+    }
+    return rooms;
+  }
+
+  function spawn() {
+    var rooms = genLevel();
+    var first = rooms[0], last = rooms[rooms.length - 1];
+    you.x = first.x + (first.w >> 1);
+    you.y = first.y + (first.h >> 1);
+    you.energy = ENERGY_THRESHOLD;
+    grid[idx(last.x + (last.w >> 1), last.y + (last.h >> 1))] = STAIRS;
+
+    mons = [];
+    var pool = MONS.filter(function (m) {
+      return depth >= m.depth[0] && depth <= m.depth[1];
+    });
+    var n = 5 + depth + random2(4);
+    for (var i = 0; i < n && rooms.length > 1; i++) {
+      var r = rooms[1 + random2(rooms.length - 1)];
+      var mx = r.x + random2(r.w), my = r.y + random2(r.h);
+      if (grid[idx(mx, my)] !== FLOOR || monAt(mx, my)) continue;
+      var t = pool[random2(pool.length)];
+      mons.push({
+        t: t, x: mx, y: my,
+        hp: hitPoints(t.hp10), max: 0,
+        // monster.cc:4613 -- a fresh monster starts near the threshold
+        energy: 70 + random2(10),
+        awake: false, poisonLeft: 0
+      });
+      mons[mons.length - 1].max = mons[mons.length - 1].hp;
+    }
+    computeFOV();
+  }
+
+  // ===========================================================================
+  // Field of view -- simple symmetric raycast out to Crawl's LOS radius
+  // ===========================================================================
+  function computeFOV() {
+    vis.fill(0);
+    var r = LOS_RADIUS;
+    for (var y = you.y - r; y <= you.y + r; y++)
+      for (var x = you.x - r; x <= you.x + r; x++) {
+        if (!inMap(x, y)) continue;
+        var dx = x - you.x, dy = y - you.y;
+        if (dx * dx + dy * dy > r * r + r) continue;
+        if (losClear(you.x, you.y, x, y)) {
+          vis[idx(x, y)] = 1;
+          seen[idx(x, y)] = 1;
+        }
+      }
+    vis[idx(you.x, you.y)] = 1;
+    seen[idx(you.x, you.y)] = 1;
+  }
+  function losClear(x0, y0, x1, y1) {
+    var dx = x1 - x0, dy = y1 - y0;
+    var n = Math.max(Math.abs(dx), Math.abs(dy));
+    if (n === 0) return true;
+    for (var i = 1; i < n; i++) {
+      var px = Math.round(x0 + dx * i / n), py = Math.round(y0 + dy * i / n);
+      if (solid(px, py)) return false;
+    }
+    return true;
+  }
+
+  // ===========================================================================
+  // Actors
+  // ===========================================================================
+  function monAt(x, y) {
+    for (var i = 0; i < mons.length; i++)
+      if (mons[i].hp > 0 && mons[i].x === x && mons[i].y === y) return mons[i];
+    return null;
+  }
+
+  function msg(text, cls) {
+    msgs.push({ t: text, c: cls || "note" });
+    if (msgs.length > 40) msgs.shift();
+    drawLog();
+  }
+  function The(m) { return "The " + m.t.id; }
+  function the(m) { return "the " + m.t.id; }
+
+  // --- player swings ---------------------------------------------------------
+  function playerAttack(m) {
+    // attack.cc:159 player branch: 15 + dex/2 + fighting + weapon skill,
+    // then attack.cc:297 mhit = random2(mhit) for the player.
+    var toHitBase = 15 + Math.floor(you.dex / 2) + you.fighting + you.wpnSkill;
+    var margin = testHit(random2(toHitBase), m.t.ev);
+    if (margin < 0) {
+      msg("You miss " + the(m) + ".", "note");
+      return;
+    }
+    var dam = random2(you.wpnDam + 1) + Math.floor(you.str / 8);
+    dam = applyAC(dam, m.t.ac);
+    m.hp -= dam;
+    if (dam <= 0) msg("You hit " + the(m) + " but do no damage.", "note");
+    else if (m.hp <= 0) {
+      msg("You kill " + the(m) + "!", "good");
+      you.kills++;
+    } else {
+      msg("You hit " + the(m) + "." + (dam >= m.max / 2 ? " It is badly wounded." : ""), "hit");
+    }
+    m.awake = true;
+  }
+
+  // --- a monster swings ------------------------------------------------------
+  function monAttack(m) {
+    // fight.cc:239 + attack.cc:305 mhit = random2(mhit + 1) for monsters
+    var margin = testHit(random2(monToHitBase(m.t.hd, false) + 1), you.ev);
+    if (margin < 0) {
+      msg(The(m) + " misses you.", "note");
+      return;
+    }
+    // attack.cc:1003 damage = 1 + random2(attk_damage)
+    var dam = 1 + random2(m.t.dam);
+    dam = applyAC(dam, you.ac);
+    you.hp -= dam;
+    if (dam <= 0) msg(The(m) + " " + m.t.atk + "s you but does no damage.", "note");
+    else msg(The(m) + " " + m.t.atk + "s you!" + (dam > 4 ? " Ouch." : ""), "hurt");
+    if (m.t.poison && dam > 0 && random2(3)) {
+      you.poison += 2;
+      msg("You feel sick.", "hurt");
+    }
+    if (you.hp <= 0) die(m.t.id);
+  }
+
+  // ===========================================================================
+  // The clock. This is the whole conversion: Crawl advances monster energy by
+  // `speed * you.time_taken / 10` whenever the player acts (mon-act.cc:1748).
+  // Nothing here changes that line -- the wall clock supplies the auts instead
+  // of the player's last action, and the player joins the same energy loop.
+  // ===========================================================================
+  function addEnergy(actor, speed, dAut) {
+    actor.energy += divRandRound(speed * dAut, BASELINE_DELAY);
+    // The one rule real time forces: energy is capped, so standing still can
+    // never bank a burst of free actions.
+    if (actor.energy > ENERGY_THRESHOLD) actor.energy = ENERGY_THRESHOLD;
+  }
+
+  function tick(dAut) {
+    if (dead || won) return;
+    aut += dAut;
+
+    // --- player ------------------------------------------------------------
+    addEnergy(you, you.speed, dAut);
+    var guardYou = 0;
+    while (you.energy >= ENERGY_THRESHOLD && guardYou++ < 4) {
+      var dir = heldDir();
+      if (!dir) break;
+      // A blocked move takes no time in Crawl, so it must not spend energy --
+      // and must not be retried in the same frame either, or the loop spins.
+      if (!doPlayerAction(dir)) break;
+      you.energy -= BASELINE_DELAY;
+      if (dead || won) return;
+    }
+
+    // --- monsters ----------------------------------------------------------
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i];
+      if (m.hp <= 0) continue;
+      addEnergy(m, m.t.sp, dAut);
+      var guard = 0;
+      while (m.energy >= ENERGY_THRESHOLD && guard++ < 8) {
+        var spent = monsterAct(m);
+        m.energy -= spent;
+        if (dead) return;
+      }
+    }
+
+    // --- upkeep ------------------------------------------------------------
+    // player-reacts.cc:1223 hit_points_regeneration += regen * delay / 10,
+    // where player_regen() is 20 + hp_max / 6 (player.cc:1424).
+    you.regen += divRandRound((20 + Math.floor(you.maxhp / 6)) * dAut, BASELINE_DELAY);
+    while (you.regen >= 100) {
+      you.regen -= 100;
+      if (you.hp < you.maxhp) you.hp++;
+    }
+    if (you.poison > 0) {
+      you.poisonAcc += dAut;
+      while (you.poisonAcc >= 10 && you.poison > 0) {
+        you.poisonAcc -= 10;
+        you.poison--;
+        you.hp--;
+        if (you.hp <= 0) { die("poison"); return; }
+      }
+    }
+  }
+
+  // Returns true when the action actually took time.
+  function doPlayerAction(dir) {
+    if (dir === ".") return true;                        // hold ground
+    if (dir === ">") {
+      if (grid[idx(you.x, you.y)] !== STAIRS) return false;
+      descend();
+      return true;
+    }
+    var nx = you.x + dir[0], ny = you.y + dir[1];
+    var m = monAt(nx, ny);
+    if (m) { playerAttack(m); return true; }
+    // A real-time affordance, not a rule change: holding a diagonal into a
+    // corner would otherwise wedge you there, since nothing re-picks the
+    // direction for you between actions the way a turn prompt does. The move
+    // still costs its normal 10 auts.
+    if (solid(nx, ny) && dir[0] && dir[1]) {
+      if (!solid(you.x + dir[0], you.y) && !monAt(you.x + dir[0], you.y))
+        { nx = you.x + dir[0]; ny = you.y; }
+      else if (!solid(you.x, you.y + dir[1]) && !monAt(you.x, you.y + dir[1]))
+        { nx = you.x; ny = you.y + dir[1]; }
+    }
+    if (solid(nx, ny)) return false;                     // walked into stone
+    var blocker = monAt(nx, ny);
+    if (blocker) { playerAttack(blocker); return true; }
+    you.x = nx; you.y = ny;
+    computeFOV();
+    if (grid[idx(nx, ny)] === STAIRS)
+      msg("There is a stone staircase down here.", "note");
+    return true;
+  }
+
+  function monsterAct(m) {
+    var cost = BASELINE_DELAY;
+    var dx = you.x - m.x, dy = you.y - m.y;
+    var far = Math.max(Math.abs(dx), Math.abs(dy));
+
+    if (!m.awake) {
+      if (far <= LOS_RADIUS && vis[idx(m.x, m.y)]) m.awake = true;
+      else return cost;
+    }
+    if (far <= 1) {
+      monAttack(m);
+      return m.t.atkCost || BASELINE_DELAY;
+    }
+    if (far > LOS_RADIUS + 3) return cost;
+
+    var sx = Math.sign(dx), sy = Math.sign(dy);
+    var tries = [[sx, sy], [sx, 0], [0, sy]];
+    for (var i = 0; i < tries.length; i++) {
+      var tx = m.x + tries[i][0], ty = m.y + tries[i][1];
+      if (!tries[i][0] && !tries[i][1]) continue;
+      if (solid(tx, ty) || monAt(tx, ty)) continue;
+      if (tx === you.x && ty === you.y) continue;
+      m.x = tx; m.y = ty;
+      return cost;
+    }
+    return cost;
+  }
+
+  function heldDir() {
+    if (keys[">"]) return ">";
+    if (keys["."] || keys[" "]) return ".";
+    var dx = 0, dy = 0;
+    if (keys.a || keys.arrowleft || keys.h) dx -= 1;
+    if (keys.d || keys.arrowright || keys.l) dx += 1;
+    if (keys.w || keys.arrowup || keys.k) dy -= 1;
+    if (keys.s || keys.arrowdown || keys.j) dy += 1;
+    return (dx || dy) ? [dx, dy] : null;
+  }
+
+  function descend() {
+    depth++;
+    if (depth > 5) {
+      won = true;
+      curtain("You climb back into daylight",
+        "Five floors on a clock that never stopped for you. " +
+        you.kills + " kills, " + Math.round(aut) + " auts.", "Press R to delve again");
+      return;
+    }
+    msg("You descend to depth " + depth + ".", "good");
+    spawn();
+  }
+
+  function die(cause) {
+    dead = true;
+    you.hp = 0;
+    curtain("You die...",
+      "Killed by " + (cause === "poison" ? "poison" : "a " + cause) +
+      " on depth " + depth + " after " + Math.round(aut) + " auts.",
+      "Press R to delve again");
+  }
+
+  function curtain(h, p, k) {
+    document.getElementById("curtain-h").textContent = h;
+    document.getElementById("curtain-h").style.color = dead ? PAL[12] : PAL[10];
+    document.getElementById("curtain-p").textContent = p;
+    document.getElementById("curtain-k").textContent = k;
+    document.getElementById("curtain").hidden = false;
+  }
+
+  // ===========================================================================
+  // Renderer: cell buffer, repaint only what changed (see BENCH.md)
+  // ===========================================================================
+  function resize() {
+    var r = viewEl.getBoundingClientRect();
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cols = Math.max(20, Math.floor(r.width / CELL_W));
+    rows = Math.max(10, Math.floor(r.height / CELL_H));
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    cv.style.width = r.width + "px";
+    cv.style.height = r.height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.font = Math.round(CELL_H * 0.72) + "px " +
+      getComputedStyle(document.body).fontFamily;
+    buf = new Int32Array(cols * rows);
+    prev = new Int32Array(cols * rows).fill(-1);
+    forceFull = true;
+  }
+
+  function put(cx, cy, g, c) {
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+    buf[(cy | 0) * cols + (cx | 0)] = g << 8 | c;
+  }
+
+  function render() {
+    if (!buf) return;
+    buf.fill(0);
+    var ox = Math.floor((cols - MAP_W) / 2), oy = Math.floor((rows - MAP_H) / 2);
+
+    for (var y = 0; y < MAP_H; y++) for (var x = 0; x < MAP_W; x++) {
+      var i = idx(x, y);
+      if (!seen[i]) continue;
+      var lit = vis[i];
+      var t = grid[i], g, c;
+      if (t === WALL) { g = GI["#"]; c = lit ? 7 : 16; }
+      else if (t === STAIRS) { g = GI[">"]; c = lit ? 15 : 16; }
+      else { g = GI["."]; c = lit ? 8 : 17; }
+      put(ox + x, oy + y, g, c);
+    }
+
+    for (var k = 0; k < mons.length; k++) {
+      var m = mons[k];
+      if (m.hp <= 0 || !vis[idx(m.x, m.y)]) continue;
+      var mc = COL[m.t.c] === undefined ? 7 : COL[m.t.c];
+      // a badly hurt monster dims, the way Crawl's health bars read
+      if (m.hp < m.max / 2 && mc >= 8) mc -= 8;
+      put(ox + m.x, oy + m.y, GI[m.t.g] === undefined ? GI["x"] : GI[m.t.g], mc);
+    }
+
+    put(ox + you.x, oy + you.y, GI["@"], dead ? 12 : 15);
+
+    var dirty = 0;
+    for (var cy = 0; cy < rows; cy++) for (var cx = 0; cx < cols; cx++) {
+      var id = cy * cols + cx, val = buf[id];
+      if (!forceFull && prev[id] === val) continue;
+      prev[id] = val;
+      dirty++;
+      ctx.fillStyle = "#050403";
+      ctx.fillRect(cx * CELL_W, cy * CELL_H, CELL_W, CELL_H);
+      var gi = val >> 8;
+      if (gi) {
+        ctx.fillStyle = PAL[val & 255];
+        ctx.fillText(GLYPHS[gi], cx * CELL_W + CELL_W / 2, cy * CELL_H + CELL_H / 2);
+      }
+    }
+    forceFull = false;
+  }
+
+  // ===========================================================================
+  // Chrome
+  // ===========================================================================
+  function drawLog() {
+    var el = document.getElementById("log");
+    el.innerHTML = "";
+    msgs.slice(-4).forEach(function (m, i, a) {
+      var p = document.createElement("p");
+      p.className = i < a.length - 1 ? "old" : m.c;
+      p.textContent = m.t;
+      el.appendChild(p);
+    });
+  }
+
+  function drawRail() {
+    document.getElementById("s-hp").textContent = Math.max(0, you.hp) + " / " + you.maxhp;
+    document.getElementById("s-ac").textContent = you.ac;
+    document.getElementById("s-ev").textContent = you.ev;
+    document.getElementById("s-sp").textContent = you.speed;
+    document.getElementById("s-d").textContent = depth + " / 5";
+    document.getElementById("s-aut").textContent = Math.round(aut);
+    var bar = document.getElementById("hpbar");
+    bar.firstElementChild.style.width =
+      Math.max(0, Math.round(you.hp / you.maxhp * 100)) + "%";
+    bar.classList.toggle("low", you.hp < you.maxhp / 3);
+
+    var led = document.getElementById("ledger");
+    var rowsOut = [];
+    rowsOut.push(row("@", "you", you.speed, you.energy, "me"));
+    var near = mons.filter(function (m) { return m.hp > 0 && vis[idx(m.x, m.y)]; })
+                   .sort(function (a, b) { return b.t.sp - a.t.sp; })
+                   .slice(0, 8);
+    near.forEach(function (m) {
+      rowsOut.push(row(m.t.g, m.t.id, m.t.sp, m.energy, "",
+                       COL[m.t.c] === undefined ? 7 : COL[m.t.c]));
+    });
+    if (near.length === 0) rowsOut.push("<div class='none'>nothing in sight</div>");
+    led.innerHTML = rowsOut.join("");
+  }
+  function row(g, name, sp, en, cls, colIdx) {
+    var pct = Math.min(100, Math.round(en / ENERGY_THRESHOLD * 100));
+    var style = colIdx === undefined ? "" : " style='color:" + PAL[colIdx] + "'";
+    return "<div class='act " + cls + "'>"
+      + "<span class='g'" + style + ">" + g + "</span>"
+      + "<span class='nm'>" + name + "</span>"
+      + "<span class='sp'>sp " + sp + "</span>"
+      + "<span class='en" + (pct >= 100 ? " ready" : "") + "'><i style='width:"
+      + pct + "%'></i></span></div>";
+  }
+
+  // ===========================================================================
+  // Input and loop
+  // ===========================================================================
+  function typingInAField(e) {
+    var t = e.target;
+    return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+                 || t.isContentEditable);
+  }
+  document.addEventListener("keydown", function (e) {
+    if (typingInAField(e)) return;
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+    if (["arrowup","arrowdown","arrowleft","arrowright"," "].indexOf(k) >= 0) e.preventDefault();
+    if (k === "r") { start(); return; }
+    keys[e.key === ">" ? ">" : k] = true;
+  });
+  document.addEventListener("keyup", function (e) {
+    if (typingInAField(e)) return;
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+    keys[e.key === ">" ? ">" : k] = false;
+  });
+  window.addEventListener("blur", function () { keys = Object.create(null); });
+
+  [["r10",10],["r20",20],["r40",40]].forEach(function (p) {
+    document.getElementById(p[0]).addEventListener("click", function () {
+      this.blur();               // keep the keyboard with the dungeon
+      rate = p[1];
+      ["r10","r20","r40"].forEach(function (id) {
+        document.getElementById(id).setAttribute("aria-pressed",
+          String(document.getElementById(id) === document.getElementById(p[0])));
+      });
+    });
+  });
+
+  var last = 0, uiAcc = 0;
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000 || 0);
+    last = now;
+    tick(dt * rate);
+    render();
+    uiAcc += dt;
+    if (uiAcc > 0.1) { uiAcc = 0; drawRail(); }
+    requestAnimationFrame(frame);
+  }
+
+  function start() {
+    dead = false; won = false; depth = 1; aut = 0; msgs = [];
+    document.getElementById("curtain").hidden = true;
+    you = {
+      x: 0, y: 0, hp: 22, maxhp: 22, ac: 5, ev: 12, speed: 10,
+      str: 16, dex: 12, fighting: 3, wpnSkill: 4, wpnDam: 7,  // a short sword
+      energy: ENERGY_THRESHOLD, regen: 0, poison: 0, poisonAcc: 0, kills: 0
+    };
+    spawn();
+    msg("Welcome. The clock is already running.", "good");
+    resize();
+    drawRail();
+  }
+
+  window.addEventListener("resize", function () { resize(); });
+  start();
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(frame); });
+})();
+</script>
