@@ -1,0 +1,377 @@
+<title>Four Ways To Draw A Circle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  :root {
+    --ground:  #06060d;
+    --panel:   #0e0e1a;
+    --panel-2: #151527;
+    --line:    #242440;
+    --line-lit:#3a3a63;
+    --ink:     #ccc9e0;
+    --dim:     #8582a8;
+    --faint:   #545072;
+    --accent:  #c77dff;
+    --ok:      #55ffff;
+    --warn:    #ffc14d;
+    --bad:     #ff6b5e;
+
+    --cell-w: 10px;
+    --cell-ratio: 2;
+    --cell-h: calc(var(--cell-w) * var(--cell-ratio));
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  }
+  .wrap {
+    max-width: 1020px; margin: 0 auto;
+    padding-inline: 20px; padding-block: 30px 56px;
+    display: flex; flex-direction: column; gap: 30px;
+  }
+  h1 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: clamp(27px, 5vw, 40px); line-height: 1.02;
+    margin: 0; text-wrap: balance;
+  }
+  .eyebrow {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+  }
+  .lede { margin: 0; max-width: 68ch; color: var(--dim); }
+  .lede b { color: var(--ink); font-weight: 400; }
+  h2 {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .15em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 12px;
+  }
+  section { display: flex; flex-direction: column; }
+
+  /* ---- the lab ---- */
+  .lab { display: grid; gap: 1px; background: var(--line);
+         border: 1px solid var(--line);
+         grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (min-width: 1000px) { .lab { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .lab { grid-template-columns: minmax(0, 1fr); } }
+  .mode > .grid { max-width: 100%; overflow-x: auto; }
+  .mode { background: var(--panel); padding: 13px 13px 12px;
+          display: flex; flex-direction: column; gap: 9px; }
+  .mode h3 { font-family: var(--cond); font-weight: 700; font-size: 15px;
+             margin: 0; letter-spacing: .03em; }
+  .mode h3 span { color: var(--faint); font-size: 11px; font-family: var(--mono);
+                  font-weight: 400; margin-left: 7px; }
+  .grid { display: grid; background: #030308; width: max-content;
+          grid-auto-rows: var(--cell-h); }
+  .cl { width: var(--cell-w); height: var(--cell-h); overflow: hidden; display: block; }
+  .cl > .g {
+    display: block; width: 100%;
+    font-size: calc(var(--cell-h) * .74); line-height: var(--cell-h);
+    text-align: center; white-space: pre; transform-origin: 50% 50%;
+    color: var(--accent);
+  }
+  .facts { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+  .facts div { display: flex; justify-content: space-between; gap: 10px; }
+  .facts dt { color: var(--faint); }
+  .facts dd { margin: 0; text-align: right; }
+  .yes { color: var(--ok); } .no { color: var(--bad); } .meh { color: var(--warn); }
+
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+         margin-bottom: 13px; }
+  button.ui {
+    font: inherit; font-size: 11px; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 2px; padding: 5px 11px; cursor: pointer;
+  }
+  button.ui:hover { border-color: var(--line-lit); }
+  button.ui[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button.ui:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .note { font-size: 11px; color: var(--faint); }
+
+  /* ---- survey ---- */
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; vertical-align: top;
+           border-bottom: 1px solid var(--line); }
+  th { color: var(--faint); font-family: var(--cond); font-weight: 700;
+       font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
+  td.n { white-space: nowrap; }
+  td a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line-lit); }
+  td a:hover { color: var(--accent); }
+  .lic { font-size: 11px; white-space: nowrap; }
+  .take { color: var(--dim); }
+  .verdict { font-family: var(--cond); font-weight: 700; font-size: 11px;
+             letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+  .v-take { color: var(--ok); } .v-maybe { color: var(--warn); } .v-no { color: var(--bad); }
+
+  .tw { overflow-x: auto; }
+  ul.notes { margin: 0; padding-left: 1.1em; color: var(--dim); max-width: 74ch; }
+  ul.notes li { margin-bottom: 7px; }
+  ul.notes b { color: var(--ink); font-weight: 400; }
+  ul.notes code { color: var(--accent); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:11px">
+    <div class="eyebrow">Survey &middot; what the ASCII world has that we do not</div>
+    <h1>Four Ways To Draw A Circle</h1>
+    <p class="lede">
+      The same expanding ring, blitted four ways. Our effects use one glyph per
+      cell; a terminal can carry <b>2, 4 or 8 subpixels</b> in the same cell
+      instead, which is how every serious terminal graphics library draws a
+      curve. The catch is the house rule: only the half blocks are in
+      <b>CP437</b>, so the higher modes buy resolution by leaving the cmd
+      alphabet behind. Font support is measured live below, not assumed.
+    </p>
+  </header>
+
+  <section>
+    <h2>The lab</h2>
+    <div class="bar">
+      <button class="ui" id="play" aria-pressed="true">&#9208; Pause</button>
+      <button class="ui" id="shape">Shape: ring</button>
+      <span class="note" id="phase"></span>
+    </div>
+    <div class="lab" id="lab"></div>
+  </section>
+
+  <section>
+    <h2>What is out there</h2>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Project</th><th>License</th><th>What it actually offers</th><th></th></tr>
+        </thead>
+        <tbody id="survey"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Reading</h2>
+    <ul class="notes">
+      <li><b>Take the data, not the dependency.</b> Nothing here needs to be
+      linked. The parts worth having are a JSON file of frame sequences, a
+      dozen lines of heat propagation, a character ramp and a file format —
+      all small enough to carry as our own code, which also keeps the licence
+      question simple.</li>
+      <li><b>Resolution is a house-rule decision, not a technical one.</b>
+      Quadrants and braille work and the font has them; they just stop looking
+      like a console. Half blocks are the only upgrade that stays inside
+      CP437.</li>
+      <li><b>The layer system makes REXPaint interesting.</b> Its
+      <code>.xp</code> format is layered per cell with a character and two
+      colours, which is the shape our buffer already has — hand-drawn panels
+      and title art could load straight in.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // =========================================================================
+  // Does the font actually have this character? Compare its rendering against
+  // U+FFFF, which is guaranteed to be missing and so draws the tofu box.
+  // =========================================================================
+  var probe = document.createElement("canvas");
+  probe.width = 24; probe.height = 24;
+  var pctx = probe.getContext("2d", { willReadFrequently: true });
+  function sig(ch, font) {
+    pctx.clearRect(0, 0, 24, 24);
+    pctx.font = font;
+    pctx.textBaseline = "middle";
+    pctx.textAlign = "center";
+    pctx.fillStyle = "#fff";
+    pctx.fillText(ch, 12, 12);
+    var d = pctx.getImageData(0, 0, 24, 24).data;
+    var h = 2166136261;
+    for (var i = 3; i < d.length; i += 4) { h ^= d[i]; h = (h * 16777619) >>> 0; }
+    return h;
+  }
+  var haveCache = null;
+  function haveGlyph(ch) {
+    var font = "18px 'IBM Plex Mono', monospace";
+    if (!haveCache) haveCache = { tofu: sig("￿", font), blank: sig(" ", font) };
+    var s = sig(ch, font);
+    return s !== haveCache.tofu && s !== haveCache.blank;
+  }
+
+  // =========================================================================
+  // Blitters. Each turns a subpixel bitmap into one character per cell.
+  // =========================================================================
+  var QUAD = [" ", "▘", "▝", "▀", "▖", "▌", "▞",
+              "▛", "▗", "▚", "▐", "▜", "▄",
+              "▙", "▟", "█"];
+  var HALF = [" ", "▀", "▄", "█"];
+
+  var MODES = [
+    { id:"glyph", name:"One glyph", sub:"1 × 1", sx:1, sy:1,
+      cp437:"yes", uni:"ASCII", probe:"*",
+      blit:function (on) { return on[0] ? "*" : " "; } },
+    { id:"half", name:"Half blocks", sub:"1 × 2", sx:1, sy:2,
+      cp437:"yes", uni:"1.1", probe:"▄",
+      blit:function (on) { return HALF[(on[0] ? 1 : 0) | (on[1] ? 2 : 0)]; } },
+    { id:"quad", name:"Quadrants", sub:"2 × 2", sx:2, sy:2,
+      cp437:"no", uni:"1.1", probe:"▟",
+      blit:function (on) {
+        return QUAD[(on[0]?1:0) | (on[1]?2:0) | (on[2]?4:0) | (on[3]?8:0)];
+      } },
+    { id:"braille", name:"Braille", sub:"2 × 4", sx:2, sy:4,
+      cp437:"no", uni:"3.0", probe:"⣿",
+      blit:function (on) {
+        // dots 1-6 then 7-8, the order the Unicode block is laid out in
+        var b = (on[0]?1:0) | (on[2]?2:0) | (on[4]?4:0) | (on[1]?8:0)
+              | (on[3]?16:0) | (on[5]?32:0) | (on[6]?64:0) | (on[7]?128:0);
+        return String.fromCharCode(0x2800 + b);
+      } }
+  ];
+
+  var COLS = 20, ROWS = 12;
+  var shapes = ["ring", "burst", "wave"];
+  var shapeI = 0, phase = 0, playing = true;
+
+  // The field is measured in cell widths on both axes, as the game's is, so a
+  // circle drawn here is a circle there too.
+  function lit(ux, uy, sx, sy, p) {
+    // ux,uy are subpixel indices; convert to world units centred on the grid
+    var wx = (ux + 0.5) / sx - COLS / 2;
+    var wy = ((uy + 0.5) / sy - ROWS / 2) * 2;      // cells are 2 units tall
+    var d = Math.hypot(wx, wy);
+    var r = 1.5 + p * (COLS * 0.46);
+    if (shapes[shapeI] === "ring") return Math.abs(d - r) < 0.55;
+    if (shapes[shapeI] === "burst") return d < r && d > r - 2.2;
+    return Math.abs(d - r) < 0.55 + Math.sin(Math.atan2(wy, wx) * 7 + p * 9) * 0.5;
+  }
+
+  function build() {
+    var lab = document.getElementById("lab");
+    lab.innerHTML = "";
+    MODES.forEach(function (m) {
+      var box = document.createElement("div");
+      box.className = "mode";
+      var h = document.createElement("h3");
+      h.innerHTML = m.name + "<span>" + m.sub + " per cell</span>";
+      var grid = document.createElement("div");
+      grid.className = "grid";
+      grid.style.gridTemplateColumns = "repeat(" + COLS + ", var(--cell-w))";
+      m.cells = [];
+      for (var i = 0; i < COLS * ROWS; i++) {
+        var c = document.createElement("span");
+        c.className = "cl";
+        var g = document.createElement("span");
+        g.className = "g";
+        c.appendChild(g);
+        grid.appendChild(c);
+        m.cells.push(g);
+      }
+      var present = haveGlyph(m.probe);
+      var f = document.createElement("dl");
+      f.className = "facts";
+      f.innerHTML =
+        row("resolution", (m.sx * m.sy) + "× the cells", "")
+        + row("in CP437", m.cp437 === "yes" ? "yes" : "no",
+              m.cp437 === "yes" ? "yes" : "no")
+        + row("needs Unicode", m.uni, "")
+        + row("font has " + m.probe, present ? "measured yes" : "measured NO",
+              present ? "yes" : "no");
+      box.appendChild(h); box.appendChild(grid); box.appendChild(f);
+      lab.appendChild(box);
+    });
+  }
+  function row(k, v, cls) {
+    return "<div><dt>" + k + "</dt><dd class='" + (cls || "") + "'>" + v + "</dd></div>";
+  }
+
+  function draw() {
+    var p = (phase % 100) / 100;
+    MODES.forEach(function (m) {
+      var on = new Array(m.sx * m.sy);
+      for (var cy = 0; cy < ROWS; cy++) for (var cx = 0; cx < COLS; cx++) {
+        for (var j = 0; j < m.sy; j++) for (var i = 0; i < m.sx; i++)
+          on[j * m.sx + i] = lit(cx * m.sx + i, cy * m.sy + j, m.sx, m.sy, p);
+        var ch = m.blit(on);
+        var el = m.cells[cy * COLS + cx];
+        if (el.textContent !== ch) el.textContent = ch;
+      }
+    });
+    document.getElementById("phase").textContent =
+      "radius " + (1.5 + p * COLS * 0.46).toFixed(1) + " world units";
+  }
+
+  // =========================================================================
+  // Survey
+  // =========================================================================
+  var SURVEY = [
+    { n:"cli-spinners", u:"https://github.com/sindresorhus/cli-spinners", l:"MIT",
+      w:"70+ named frame loops as one plain spinners.json, each with frames and an interval. A ready vocabulary for cooldown pips, charge-ups and the level-up pulse.",
+      v:"take", vc:"v-take" },
+    { n:"terminaltexteffects", u:"https://github.com/ChrisBuilds/terminaltexteffects", l:"MIT",
+      w:"37 named text effects — burn, decrypt, matrix, rain, beams, spotlights, waves, blackhole. Not a library to link, but the best catalogue of what a character grid can do to text.",
+      v:"take ideas", vc:"v-take" },
+    { n:"DOOM fire (PSX)", u:"https://fabiensanglard.net/doom_fire_psx/", l:"algorithm, widely reimplemented",
+      w:"A dozen lines: a hot bottom row, heat propagating upward with a random decay and sideways drift. Mapped onto a character ramp it gives the fire pot a lingering burn instead of a one-shot bloom.",
+      v:"take", vc:"v-take" },
+    { n:"REXPaint .xp", u:"https://steveasleep.com/rexpaint_manual.html", l:"format is documented, parsers are free",
+      w:"The roguelike world's ASCII art format: zlib-deflated, layered, one character plus foreground and background colour per cell. The same shape as our buffer, so hand-drawn panels could load straight in.",
+      v:"maybe", vc:"v-maybe" },
+    { n:"notcurses", u:"https://github.com/dankamongmen/notcurses", l:"Apache-2.0",
+      w:"Names and documents the blitter ladder the lab above demonstrates: 1x1, half, quadrant, sextant, octant, braille, with graceful degradation between them. Worth reading, not linking.",
+      v:"read", vc:"v-maybe" },
+    { n:"drawille", u:"https://github.com/asciimoo/drawille", l:"AGPL-3.0",
+      w:"The canonical braille canvas, 2x4 subpixels a cell. The technique is free to reimplement; the code is not safe to copy into a web game.",
+      v:"do not copy", vc:"v-no" },
+    { n:"rot.js", u:"https://github.com/ondras/rot.js", l:"BSD-3-Clause",
+      w:"A whole roguelike toolkit: RNG, map generation, FOV, lighting, pathfinding, scheduling, a canvas ASCII display. Permissive and good, but it duplicates the renderer we already have and this game needs none of the rest.",
+      v:"skip", vc:"v-no" },
+    { n:"FIGlet / FIGfonts", u:"http://www.jave.de/figlet/figfont.html", l:"program BSD, fonts vary",
+      w:"Big text from small characters, a documented .flf format with hundreds of fonts. Tempting for the title and the death screen, but individual font files carry their own terms and have to be checked one by one.",
+      v:"maybe", vc:"v-maybe" },
+    { n:"aalib / donut.c ramp", u:"https://fabiensanglard.net/doom_fire_psx/", l:"the ramp itself is a convention",
+      w:"The shading convention every ASCII renderer uses: an ordered character ramp such as .,-~:;=!*#$@ from dim to bright. Ours is ad hoc; adopting a tuned ramp would make overlap depth read more evenly.",
+      v:"take", vc:"v-take" }
+  ];
+  function buildSurvey() {
+    document.getElementById("survey").innerHTML = SURVEY.map(function (s) {
+      return "<tr><td class='n'><a href='" + s.u + "' target='_blank' rel='noopener'>"
+        + s.n + "</a></td>"
+        + "<td class='lic'>" + s.l + "</td>"
+        + "<td class='take'>" + s.w + "</td>"
+        + "<td class='verdict " + s.vc + "'>" + s.v + "</td></tr>";
+    }).join("");
+  }
+
+  document.getElementById("play").addEventListener("click", function () {
+    playing = !playing;
+    this.setAttribute("aria-pressed", String(playing));
+    this.innerHTML = playing ? "⏸ Pause" : "▶ Play";
+    this.blur();
+  });
+  document.getElementById("shape").addEventListener("click", function () {
+    shapeI = (shapeI + 1) % shapes.length;
+    this.textContent = "Shape: " + shapes[shapeI];
+    this.blur();
+    draw();
+  });
+
+  var last = 0, acc = 0;
+  function loop(now) {
+    var dt = (now - last) / 1000 || 0;
+    last = now;
+    if (playing) {
+      acc += dt;
+      while (acc > 0.05) { acc -= 0.05; phase++; }
+      draw();
+    }
+    requestAnimationFrame(loop);
+  }
+
+  build(); buildSurvey(); draw();
+  if (document.fonts && document.fonts.ready)
+    document.fonts.ready.then(function () { haveCache = null; build(); draw(); });
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(loop); });
+})();
+</script>
