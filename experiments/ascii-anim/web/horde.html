@@ -52,7 +52,13 @@
     + "─│┌┐└┘").split("");
   var GI = {};
   GLYPHS.forEach(function (g, i) { if (GI[g] === undefined) GI[g] = i; });
-  var RAMP = [GI[":"], GI[";"], GI["*"], GI["#"], GI["@"]];
+  // The shading ramp every ASCII renderer uses, dim to bright (aalib, and the
+  // gradient donut.c picks from). Ours was five ad-hoc steps; this is twelve,
+  // which matters once a cell can hold ten foes.
+  var RAMP = ".,-~:;=!*#$@".split("").map(function (ch) { return GI[ch]; });
+  // Half blocks give a curve twice the vertical resolution while staying
+  // inside CP437 (0xDC 0xDF 0xDB), unlike quadrants or braille.
+  var HALF = [0, GI["\u2580"], GI["\u2584"], GI["\u2588"]];
 
   function ri(n) { return Math.floor(Math.random() * n); }
   function rnd(n) { return Math.random() * n; }
@@ -95,7 +101,7 @@
       per:function (L) { return { cd: 1.5 - L*0.11, dmg: 6 + L*4, r: 5 + L*1.5 }; } },
     { id:"firepot", g:"*", name:"Fire pot", kind:"weapon",
       src:"bolt::explode sweep - beam.cc:6985",
-      desc:"Lobbed into the thick of them. Blooms outward.",
+      desc:"Lobbed into the thick of them. Leaves the ground burning.",
       per:function (L) { return { cd: 2.4 - L*0.16, dmg: 20 + L*12, r: 4 + L*0.9 }; } },
     { id:"arc", g:"|", name:"Arc", kind:"weapon",
       src:"bolt::draw, chained - beam.cc:721",
@@ -119,6 +125,14 @@
       desc:"Everything you carry comes round sooner.",
       per:function (L) { return { haste: 1 - L*0.07 }; } }
   ];
+  // Frame loops taken verbatim from cli-spinners' spinners.json (MIT,
+  // sindresorhus/cli-spinners). Only the pure-ASCII sets are used, so the
+  // loadout line stays inside the cmd alphabet.
+  var SPIN = {
+    line:    { frames: ["-", "\\", "|", "/"], interval: 130 },
+    balloon: { frames: [" ", ".", "o", "O", "@", "*", " "], interval: 140 }
+  };
+
   var MAX_SLOTS = 6;
   var RUN_LENGTH = 300;
 
@@ -129,7 +143,7 @@
   var cols = 0, rows = 0, buf = null, prev = null, forceFull = true;
   var counts = null, owner = null;
   var F = { x:1, y:3, w:10, h:10 };           // the field, in cells
-  var you, foes, gems, fx, t, over_, paused, kills, stat, offer, hitRects;
+  var you, foes, gems, fx, fires, t, over_, paused, kills, stat, offer, hitRects;
   var keys = Object.create(null);
   var shake = 0, flash = 0;
 
@@ -166,7 +180,7 @@
   var Z = { GROUND:1, ITEM:2, ACTOR:3, FX:4, NUM:5, UI:6 };
 
   var zbuf = null;                      // layer occupying each cell
-  var fxN = null, fxG = null, fxC = null;   // effect accumulator
+  var fxN = null, fxG = null, fxC = null, fxH = null;  // effect accumulator
 
   // colour -> its hotter neighbour, for stacked effects
   var HOTTER = {};
@@ -201,6 +215,17 @@
     fxG[i] = g;
     fxC[i] = c;
   }
+  // Curves go through here instead, keeping their fractional row so the pair
+  // of half blocks can place them to within half a cell.
+  function putFXHalf(cx, cyf, c) {
+    var cy = Math.floor(cyf);
+    if (!inClip(cx | 0, cy)) return;
+    var i = cy * cols + (cx | 0);
+    if (zbuf[i] > Z.ACTOR) return;
+    if (fxN[i] < 255) fxN[i]++;
+    fxH[i] |= (cyf - cy) < 0.5 ? 1 : 2;
+    fxC[i] = c;
+  }
   function resolveFX() {
     for (var i = 0; i < fxN.length; i++) {
       var n = fxN[i];
@@ -209,6 +234,7 @@
       for (var k = 1; k < n && k < 3; k++) col = HOTTER[col] === undefined ? col : HOTTER[col];
       var glyph;
       if (zbuf[i] === Z.ACTOR) glyph = buf[i] >> 8;        // keep who it is
+      else if (fxH[i]) glyph = HALF[fxH[i]];               // a curve, at 2x
       else if (n >= 5) glyph = GI["@"];
       else if (n >= 3) glyph = GI["#"];
       else glyph = fxG[i];
@@ -275,6 +301,7 @@
     fxN = new Uint8Array(cols * rows);
     fxG = new Uint8Array(cols * rows);
     fxC = new Uint8Array(cols * rows);
+    fxH = new Uint8Array(cols * rows);
     prev = new Int32Array(cols * rows).fill(-1);
     // rows: 0 frame, 1 status, 2 rule, [field], rule, hp, load, frame
     F.x = 1; F.y = 3; F.w = cols - 2; F.h = Math.max(8, rows - 7);
@@ -348,11 +375,26 @@
     x = 2;
     if (!you.arms.length) putStr(x, y, "nothing yet - walk over the sparks", C.frame, Z.UI);
     you.arms.forEach(function (a) {
-      var tag = a.def.g + " " + a.def.name + " " + a.lv;
+      var tag = "  " + a.def.g + " " + a.def.name + " " + a.lv;
       if (x + tag.length + 2 > right) return;
-      putStr(x, y, a.def.g, a.def.kind === "passive" ? C.xp : C.us, Z.UI);
-      putStr(x + 2, y, a.def.name, C.dim, Z.UI);
-      putStr(x + 2 + a.def.name.length + 1, y, String(a.lv), C.ink, Z.UI);
+      // The pip winds round as the weapon recharges, and flares on the beat
+      // it fires. Frames are cli-spinners' "line"; the flare is "balloon".
+      if (a.def.kind === "passive") putStr(x, y, "\u00b7", C.frame, Z.UI);
+      else {
+        var p = a.def.per(a.lv), full = Math.max(0.05, p.cd * s.haste);
+        var done = 1 - Math.max(0, a.t) / full;
+        if (done > 0.93) {
+          var bf = SPIN.balloon.frames;
+          putStr(x, y, bf[Math.floor(t * 1000 / SPIN.balloon.interval) % bf.length],
+                 C.gold, Z.UI);
+        } else {
+          var lf = SPIN.line.frames;
+          putStr(x, y, lf[Math.floor(done * lf.length * 3) % lf.length], C.frame, Z.UI);
+        }
+      }
+      putStr(x + 2, y, a.def.g, a.def.kind === "passive" ? C.xp : C.us, Z.UI);
+      putStr(x + 4, y, a.def.name, C.dim, Z.UI);
+      putStr(x + 4 + a.def.name.length + 1, y, String(a.lv), C.ink, Z.UI);
       x += tag.length + 3;
     });
   }
@@ -391,13 +433,14 @@
       if (!n) continue;
       var m2 = foes[owner[k]];
       put(F.x + (k % F.w), F.y + ((k / F.w) | 0),
-          n === 1 ? GI[m2.def.g] : RAMP[Math.min(4, n - 1)],
+          n === 1 ? GI[m2.def.g] : RAMP[Math.min(RAMP.length - 1, n)],
           m2.hurt > 0 ? C.ink : m2.def.c, Z.ACTOR);
     }
 
     // the player is an actor too, so effects light him rather than erase him
     put(toCellX(you.x), toCellY(you.y), GI["@"],
         you.iframe > 0 ? C.ink : C.us, Z.ACTOR);
+    drawFires();
     stampFX();
     resolveFX();
     unclip();
@@ -420,8 +463,8 @@
         var rr = e.r * p;
         for (j = 0; j < 44; j++) {
           var th = j / 44 * Math.PI * 2;
-          putFX(toCellX(e.x + Math.cos(th) * rr), toCellY(e.y + Math.sin(th) * rr),
-                GI[e.g], e.c);
+          putFXHalf(toCellX(e.x + Math.cos(th) * rr),
+                    toCellY(e.y + Math.sin(th) * rr), e.c);
         }
       } else if (e.k === "burst") {
         var band = e.r * p;
@@ -429,14 +472,14 @@
           for (var dx = -e.r; dx <= e.r; dx += 0.5) {
             var d = Math.hypot(dx, dy);
             if (d > band || d < band - 1.4) continue;
-            putFX(toCellX(e.x + dx), toCellY(e.y + dy), GI["#"], e.c);
+            putFXHalf(toCellX(e.x + dx), toCellY(e.y + dy), e.c);
           }
       } else if (e.k === "wave") {
         var lo = e.r * p, hi = lo + 2.4;
         for (var a = 0; a < 190; a++) {
           var an = a / 190 * Math.PI * 2, rad = lo + Math.random() * (hi - lo);
-          putFX(toCellX(e.x + Math.cos(an) * rad), toCellY(e.y + Math.sin(an) * rad),
-                GI["*"], e.c);
+          putFXHalf(toCellX(e.x + Math.cos(an) * rad),
+                    toCellY(e.y + Math.sin(an) * rad), e.c);
         }
       } else if (e.k === "pop") {
         var pr = 1.6 * p;
@@ -516,6 +559,7 @@
     buf.fill(0);
     zbuf.fill(0);
     fxN.fill(0);
+    fxH.fill(0);
     drawField();
     drawShell();
     if (paused && offer) drawLevelUp();
@@ -543,6 +587,89 @@
     forceFull = false;
     stat.dirty = dirty;
     stat.ms = stat.ms * 0.88 + (performance.now() - t0) * 0.12;
+  }
+
+  // ===========================================================================
+  // Lingering fire -- the PSX DOOM effect (fabiensanglard.net/doom_fire_psx),
+  // reimplemented. A hot bottom row, heat carried upward each tick with a
+  // random decay and a sideways drift of one cell, read out through the
+  // shading ramp. It turns the fire pot from a single bloom into ground you
+  // do not want to stand on.
+  // ===========================================================================
+  var FIRE_COL = [0, 4, 4, 12, 12, 6, 6, 14, 14, 15];
+  var FIRE_MAX = FIRE_COL.length - 1;
+
+  function lightFire(wx, wy, r, dmg) {
+    var w = Math.max(5, Math.round(r * 2));
+    var h = Math.max(4, Math.round(r / YS) + 4);
+    var heat = new Uint8Array(w * h);
+    // seed the bottom row across the width of the blast
+    for (var x = 0; x < w; x++) heat[(h - 1) * w + x] = FIRE_MAX;
+    // wx0 is the left edge and wy0 the world row the SOURCE sits on, a little
+    // below the blast centre so the flame rises through it. Every row above is
+    // one cell height higher, which is YS world units.
+    fires.push({ wx: wx - w / 2, wy: wy + r * 0.5,
+                 w: w, h: h, heat: heat, acc: 0, fuel: 2.2, dmg: dmg * 0.22 });
+    if (fires.length > 8) fires.shift();
+  }
+
+  function spreadFire(f) {
+    var w = f.w, heat = f.heat;
+    for (var x = 0; x < w; x++) {
+      for (var y = 1; y < f.h; y++) {
+        var src = y * w + x;
+        var v = heat[src];
+        if (!v) continue;
+        var rand = Math.round(Math.random() * 3) & 3;
+        var dx = rand - 1;
+        var nx = x + dx;
+        if (nx < 0 || nx >= w) nx = x;
+        heat[(y - 1) * w + nx] = Math.max(0, v - (rand & 1));
+      }
+    }
+    // the bottom row cools once the fuel is gone, and the fire dies upward
+    if (f.fuel <= 0)
+      for (var k = 0; k < w; k++)
+        heat[(f.h - 1) * w + k] = Math.max(0, heat[(f.h - 1) * w + k] - 1);
+  }
+
+  function stepFires(dt) {
+    for (var i = fires.length - 1; i >= 0; i--) {
+      var f = fires[i];
+      f.fuel -= dt;
+      f.acc += dt;
+      var burned = false;
+      while (f.acc >= 1 / 20) { f.acc -= 1 / 20; spreadFire(f); burned = true; }
+      if (!burned) continue;
+      // anything standing in the hot part takes it
+      var alive = 0;
+      for (var y = 0; y < f.h; y++) for (var x = 0; x < f.w; x++) {
+        var v = f.heat[y * f.w + x];
+        if (v > 2) alive++;
+      }
+      if (!alive) { fires.splice(i, 1); continue; }
+      foesIn(f.wx + f.w / 2, f.wy - (f.h - 1) * YS / 2, f.w * 0.75)
+        .forEach(function (m) {
+          var cx = Math.floor(m.x - f.wx);
+          var cy = Math.floor((m.y - f.wy) / YS) + (f.h - 1);
+          if (cx < 0 || cy < 0 || cx >= f.w || cy >= f.h) return;
+          if (f.heat[cy * f.w + cx] > 2) hurtFoe(m, f.dmg, 14);
+        });
+    }
+  }
+
+  function drawFires() {
+    for (var i = 0; i < fires.length; i++) {
+      var f = fires[i];
+      for (var y = 0; y < f.h; y++) for (var x = 0; x < f.w; x++) {
+        var v = f.heat[y * f.w + x];
+        if (!v) continue;
+        var wx = f.wx + x, wy = f.wy + (y - (f.h - 1)) * YS;
+        putFX(toCellX(wx), toCellY(wy),
+              RAMP[Math.min(RAMP.length - 1, Math.round(v / FIRE_MAX * 9) + 2)],
+              FIRE_COL[v]);
+      }
+    }
   }
 
   // ===========================================================================
@@ -574,11 +701,20 @@
     }
     return out;
   }
+  // The field is far wider than it is tall in world units -- 96 by 46 at a
+  // typical size -- and foes walk in from a circle wider than that, so a
+  // nearest-by-distance target could easily be off the top or bottom of the
+  // screen. Weapons only aim at what the player can actually see.
+  function onScreen(m) {
+    var cx = toCellX(m.x), cy = toCellY(m.y);
+    return cx >= F.x && cy >= F.y && cx < F.x + F.w && cy < F.y + F.h;
+  }
   function nearestFoe(x, y, skip) {
     var best = null, bd = 1e9;
     for (var i = 0; i < foes.length; i++) {
       var m = foes[i];
       if (m.dead || (skip && skip.indexOf(m) >= 0)) continue;
+      if (!onScreen(m)) continue;
       var d = (m.x - x) * (m.x - x) + (m.y - y) * (m.y - y);
       if (d < bd) { bd = d; best = m; }
     }
@@ -629,6 +765,7 @@
       var cx = tg ? tg.x : you.x + 6, cy = tg ? tg.y : you.y;
       fx.push({ k:"burst", x:cx, y:cy, r:p.r, c:12, life:0.42, max:0.42 });
       foesIn(cx, cy, p.r).forEach(function (m) { hurtFoe(m, p.dmg, 12); });
+      lightFire(cx, cy, p.r, p.dmg);
 
     } else if (a.def.id === "arc") {
       var from = { x:you.x, y:you.y }, chain = [];
@@ -723,6 +860,8 @@
         }
       }
     }
+
+    stepFires(dt);
 
     for (var e = fx.length - 1; e >= 0; e--) {
       fx[e].life -= dt;
@@ -834,7 +973,7 @@
 
   function start() {
     over_ = null; paused = false; t = 0; kills = 0;
-    foes = []; gems = []; fx = []; offer = null; hitRects = null;
+    foes = []; gems = []; fx = []; fires = []; offer = null; hitRects = null;
     shake = 0; flash = 0;
     stat = { dirty:0, ms:0 };
     you = { x:0, y:0, hp:100, maxhp:100, lv:1, xp:0, need:5,
