@@ -116,8 +116,7 @@
     "#63e0d0", "#3f9a90", "#27605a",   // 49-51 gem
     "#ff8a3d", "#c2521a", "#7d3210"    // 52-54 magma, by depth
   ];
-  var C = { ink:17, dim:18, frame:19, label:20, warn:21, good:22, rule:23,
-            sky:37, panel:39 };
+  var C = { ink:17, dim:18, frame:19, label:20, rule:23, sky:37, panel:39 };
 
   // The alphabet this page draws with. Box drawing and the three half blocks
   // are the only things outside ASCII; both are CP437 and both are already
@@ -131,8 +130,6 @@
   GLYPHS.forEach(function (g, i) { if (GI[g] === undefined) GI[g] = i; });
   var G_UPPER = GI["▀"], G_FULL = GI["█"];
 
-  // The shading ramp, dim to bright. Water depth reads off it.
-  var RAMP = ".,-~:;=!*#$@".split("").map(function (ch) { return GI[ch]; });
 
   function pad(s, n) { s = String(s); return s.length >= n ? s : s + " ".repeat(n - s.length); }
   function rpad(s, n) { s = String(s); return s.length >= n ? s : " ".repeat(n - s.length) + s; }
@@ -195,14 +192,6 @@
     put(x, y + h - 1, GI["╚"], fg, Z.UI, C.panel);
     put(x + w - 1, y + h - 1, GI["╝"], fg, Z.UI, C.panel);
   }
-  function bar(x, y, w, frac, cFull, cEmpty) {
-    var inner = w - 2;
-    var n = clamp(Math.round(frac * inner), 0, inner);
-    put(x, y, GI["["], cEmpty, Z.UI);
-    for (var i = 0; i < inner; i++)
-      put(x + 1 + i, y, GI[i < n ? "=" : "-"], i < n ? cFull : cEmpty, Z.UI);
-    put(x + w - 1, y, GI["]"], cEmpty, Z.UI);
-  }
 
   var V = { x:1, y:3, w:10, h:10 };        // the view area, in cells
   function resize() {
@@ -229,7 +218,7 @@
     forceFull = true;
   }
 
-  var stat = { dirty:0, paintMs:0, tickMs:0, pressMs:0, active:0 };
+  var stat = { dirty:0, paintMs:0, tickMs:0, pressMs:0 };
   function paint() {
     var t0 = performance.now();
     var dirty = 0;
@@ -262,50 +251,52 @@
   // The function is stringified into the blob, so it must not close over
   // anything outside itself.
   // ===========================================================================
+  // Midpoint displacement: seed the corners, fill the space fractally, then
+  // flatten onto 0..1. DF's elevation comes out of exactly this, and so does
+  // every detail field the local map is cut from -- which is why there is one
+  // of it. The worker cannot close over anything, so it gets this by having
+  // the source of both functions prepended to its blob.
+  function normalise(h) {
+    var lo = Infinity, hi = -Infinity, i;
+    for (i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
+    var d = hi - lo || 1;
+    for (i = 0; i < h.length; i++) h[i] = (h[i] - lo) / d;
+    return h;
+  }
+  function fractal(n, seed, rough) {
+    var h = new Float32Array(n * n), r = seed >>> 0 || 1;
+    function nx() { r ^= r << 13; r ^= r >>> 17; r ^= r << 5; return (r >>>= 0); }
+    function fr() { return (nx() >>> 8) * (1 / 16777216); }
+    var size = n - 1, x, y;
+    h[0] = fr(); h[size] = fr(); h[size * n] = fr(); h[size * n + size] = fr();
+    var scale = 1;
+    for (var step = size; step > 1; step >>= 1) {
+      var half = step >> 1;
+      for (y = 0; y < size; y += step) for (x = 0; x < size; x += step) {
+        var a = h[y*n+x], b = h[y*n+x+step], c = h[(y+step)*n+x], d = h[(y+step)*n+x+step];
+        h[(y+half)*n+(x+half)] = (a + b + c + d) * 0.25 + (fr() - 0.5) * scale;
+      }
+      for (y = 0; y <= size; y += half) {
+        var x0 = ((y / half) & 1) ? 0 : half;
+        for (x = x0; x <= size; x += step) {
+          var sum = 0, cnt = 0;
+          if (x >= half)        { sum += h[y*n+x-half];   cnt++; }
+          if (x + half <= size) { sum += h[y*n+x+half];   cnt++; }
+          if (y >= half)        { sum += h[(y-half)*n+x]; cnt++; }
+          if (y + half <= size) { sum += h[(y+half)*n+x]; cnt++; }
+          h[y*n+x] = sum / cnt + (fr() - 0.5) * scale;
+        }
+      }
+      scale *= rough;
+    }
+    return normalise(h);
+  }
+
   function workerMain() {
     var rng = 1;
     function xs32() { var x = rng; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (rng = x >>> 0); }
     function frand() { return (xs32() >>> 8) * (1 / 16777216); }
 
-    // Midpoint displacement: seed the corners, fill the space fractally.
-    // DF's elevation comes out of exactly this.
-    function diamondSquare(h, n, seed, rough) {
-      rng = seed >>> 0 || 1;
-      var size = n - 1;
-      h[0] = frand(); h[size] = frand();
-      h[size * n] = frand(); h[size * n + size] = frand();
-      var scale = 1;
-      for (var step = size; step > 1; step >>= 1) {
-        var half = step >> 1, x, y;
-        for (y = 0; y < size; y += step)
-          for (x = 0; x < size; x += step) {
-            var a = h[y * n + x], b = h[y * n + x + step];
-            var c = h[(y + step) * n + x], d = h[(y + step) * n + x + step];
-            h[(y + half) * n + (x + half)] = (a + b + c + d) * 0.25 + (frand() - 0.5) * scale;
-          }
-        for (y = 0; y <= size; y += half) {
-          var x0 = ((y / half) & 1) ? 0 : half;
-          for (x = x0; x <= size; x += step) {
-            var sum = 0, cnt = 0;
-            if (x >= half)         { sum += h[y * n + x - half];   cnt++; }
-            if (x + half <= size)  { sum += h[y * n + x + half];   cnt++; }
-            if (y >= half)         { sum += h[(y - half) * n + x]; cnt++; }
-            if (y + half <= size)  { sum += h[(y + half) * n + x]; cnt++; }
-            h[y * n + x] = sum / cnt + (frand() - 0.5) * scale;
-          }
-        }
-        scale *= rough;
-      }
-      return h;
-    }
-    function norm(h) {
-      var lo = Infinity, hi = -Infinity, i;
-      for (i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
-      var d = hi - lo || 1;
-      for (i = 0; i < h.length; i++) h[i] = (h[i] - lo) / d;
-      return h;
-    }
-    function field(n, seed, rough) { return norm(diamondSquare(new Float32Array(n * n), n, seed, rough)); }
 
     // Flatten a field onto its own distribution, so the 0-100 scale means
     // percentile. DF's parameters are weighted ranges over that scale and its
@@ -421,10 +412,10 @@
       var cells = n * n, i, x, y;
 
       // --- the five fields DF carries -----------------------------------
-      var elev = field(n, seed, 0.54);
-      var drain = field(n, seed ^ 0x9e3779b9, 0.58);
-      var volc = field(n, seed ^ 0x25459827, 0.63);
-      var wet = field(n, seed ^ 0x85ebca6b, 0.60);
+      var elev = fractal(n, seed, 0.54);
+      var drain = fractal(n, seed ^ 0x9e3779b9, 0.58);
+      var volc = fractal(n, seed ^ 0x25459827, 0.63);
+      var wet = fractal(n, seed ^ 0x85ebca6b, 0.60);
 
       // A gentle pull toward the sea at the edges, so the world is a land
       // mass with a coastline rather than noise that happens to cross a
@@ -435,7 +426,7 @@
         var fall = 1 - r * r;
         elev[y * n + x] = elev[y * n + x] * 0.72 + Math.max(0, fall) * 0.42;
       }
-      norm(elev);
+      normalise(elev);
 
       var flood = fillDepressions(elev, n);
       var filled = flood.filled;
@@ -616,7 +607,7 @@
     { n:"Grassland", c:8  }, { n:"Savanna",   c:9  }, { n:"Forest",    c:10 },
     { n:"Swamp",     c:11 }, { n:"Marsh",     c:12 }
   ];
-  var B_OCEAN = 0, B_LAKE = 1, B_RIVER = 2, B_MOUNTAIN = 5, B_PEAK = 6;
+  var B_OCEAN = 0, B_RIVER = 2;
   // A river is one tile wide and would vanish from an overview that sampled
   // each block, so it wins its block outright. Nothing else does: give the
   // same override to an areal biome and it swallows the map, because at ten
@@ -663,13 +654,20 @@
           (d.accepted ? "." : " (accepted under protest: " + d.fails.join(", ") + ")."));
   }
 
+  // Both paths need the shared kernels in scope, and neither a blob worker
+  // nor a Function body can see this closure.
+  function kernelSource() {
+    return normalise.toString() + "\n" + fractal.toString() +
+           "\n(" + workerMain.toString() + ")();";
+  }
+
   function inlineWorker() {
     // The same function, with `self` shadowed by a stand-in. Nothing is
     // transferred because nothing crosses a thread, so the buffers arrive
     // attached rather than detached -- which the receiving side does not care
     // about either way.
     var host = { onmessage: null, postMessage: function (d) { onGenMessage({ data: d }); } };
-    (new Function("self", "(" + workerMain.toString() + ")();"))(host);
+    (new Function("self", kernelSource()))(host);
     return { postMessage: function (d) { host.onmessage({ data: d }); } };
   }
 
@@ -684,7 +682,7 @@
 
   function startWorker() {
     try {
-      var src = "(" + workerMain.toString() + ")()";
+      var src = kernelSource();
       var url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
       worker = new Worker(url);
       worker.onmessage = onGenMessage;
@@ -845,39 +843,6 @@
   var L = null;
   var lcur = { x:0, y:0 };
 
-  function lds(n, seed, rough) {           // the same midpoint displacement
-    var h = new Float32Array(n * n), r = seed >>> 0 || 1;
-    function nx() { r ^= r << 13; r ^= r >>> 17; r ^= r << 5; return (r >>>= 0); }
-    function fr() { return (nx() >>> 8) * (1 / 16777216); }
-    var size = n - 1, x, y;
-    h[0] = fr(); h[size] = fr(); h[size * n] = fr(); h[size * n + size] = fr();
-    var scale = 1;
-    for (var step = size; step > 1; step >>= 1) {
-      var half = step >> 1;
-      for (y = 0; y < size; y += step) for (x = 0; x < size; x += step) {
-        var a = h[y*n+x], b = h[y*n+x+step], c = h[(y+step)*n+x], d2 = h[(y+step)*n+x+step];
-        h[(y+half)*n+(x+half)] = (a+b+c+d2) * 0.25 + (fr() - 0.5) * scale;
-      }
-      for (y = 0; y <= size; y += half) {
-        var x0 = ((y / half) & 1) ? 0 : half;
-        for (x = x0; x <= size; x += step) {
-          var s2 = 0, c2 = 0;
-          if (x >= half)        { s2 += h[y*n+x-half];   c2++; }
-          if (x + half <= size) { s2 += h[y*n+x+half];   c2++; }
-          if (y >= half)        { s2 += h[(y-half)*n+x]; c2++; }
-          if (y + half <= size) { s2 += h[(y+half)*n+x]; c2++; }
-          h[y*n+x] = s2 / c2 + (fr() - 0.5) * scale;
-        }
-      }
-      scale *= rough;
-    }
-    var lo = Infinity, hi = -Infinity, i;
-    for (i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
-    var dd = hi - lo || 1;
-    for (i = 0; i < h.length; i++) h[i] = (h[i] - lo) / dd;
-    return h;
-  }
-
   function buildLocal(wi) {
     var n = W.n, wx = wi % n, wy = (wi / n) | 0;
     var w = clamp(V.w - 2, 40, 160), h = clamp(V.h, 12, 60);
@@ -889,7 +854,7 @@
 
     // Fine detail, then the world's own slope through the tile, so the local
     // map joins up with its neighbours instead of floating free.
-    var D = 129, det = lds(D, (gen.seed ^ (wi * 2654435761)) >>> 0, 0.52);
+    var D = 129, det = fractal(D, (gen.seed ^ (wi * 2654435761)) >>> 0, 0.52);
     function worldElev(fx, fy) {                 // fx,fy in -0.5..0.5 of a tile
       var ex = clamp(wx + fx, 0, n - 1), ey = clamp(wy + fy, 0, n - 1);
       var x0 = Math.floor(ex), y0 = Math.floor(ey);
@@ -908,7 +873,7 @@
     //
     // So the world sets where the ground sits and the detail sets how far it
     // moves, in levels, with mountains breaking up more than a coastal plain.
-    var avg = 0, sLo = LD, sHi = 0;
+    var avg = 0;
     for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
       var base = worldElev((x / w) - 0.5, (y / h) - 0.5);
       var fine = det[Math.min(D-1, (y * D / h) | 0) * D + Math.min(D-1, (x * D / w) | 0)];
@@ -916,8 +881,6 @@
       var z = Math.round(SEA_Z + (base - W.sea) * 20 + (fine - 0.5) * (4 + rough * 10));
       z = clamp(z, 1, LD - 3);
       surface[y * w + x] = z;
-      if (z < sLo) sLo = z;
-      if (z > sHi) sHi = z;
       avg += z;
     }
     avg = Math.round(avg / plane);
@@ -931,7 +894,7 @@
 
     // Layer boundaries wander rather than lying flat, and the igneous rock
     // comes up to meet you where the world is volcanic.
-    var LAY = 65, lay = lds(LAY, (gen.seed ^ (wi * 40503) ^ 0x5bf03635) >>> 0, 0.5);
+    var LAY = 65, lay = fractal(LAY, (gen.seed ^ (wi * 40503) ^ 0x5bf03635) >>> 0, 0.5);
     var soilDeep = rain > 0.55 ? 2 : 1;
     var sedThick = 2 + Math.round((1 - volc) * 4);
 
@@ -939,10 +902,9 @@
     // rock to spare above it. Dig down far enough and you break into it --
     // which, if its floor is wet, is the second most memorable thing that
     // happens to a fort.
-    var CAV = 129, cavN = lds(CAV, (gen.seed ^ (wi * 2246822519)) >>> 0, 0.56);
+    var CAV = 129, cavN = fractal(CAV, (gen.seed ^ (wi * 2246822519)) >>> 0, 0.56);
     var cavTop = clamp(aqBot - 3, 3, LD - 8), cavBot = cavTop - 1;
     var cavWet = clamp((rain * 0.6 + (1 - drain) * 0.4), 0, 1);
-    var cavCells = 0;
 
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
       var p = y * w + x, sz = surface[p];
@@ -961,7 +923,6 @@
                     + Math.min(CAV-1, (x * CAV / w) | 0)];
         if (cv > 0.58 && x > 0 && y > 0 && x < w - 1 && y < h - 1) {
           for (var zc2 = cavBot; zc2 <= cavTop; zc2++) mat[zc2 * plane + p] = MAT.OPEN;
-          cavCells++;
           // standing water in the deeper half of it, in proportion to how
           // wet the region is
           if (cv > 0.58 + (1 - cavWet) * 0.22) lvl[cavBot * plane + p] = 7;
@@ -977,7 +938,7 @@
     // the world is volcanic -- which is the second thing volcanism decides.
     var vr = (gen.seed ^ (wi * 2654435761) ^ 0x9e3779b9) >>> 0 || 1;
     function vrand() { vr ^= vr << 13; vr ^= vr >>> 17; vr ^= vr << 5; return (vr >>>= 0); }
-    var veins = 0, gemCells = 0, oreCells = 0;
+    var veins = 0;
     function growVein(kind, want, onlyIgneous) {
       for (var tries = 0; tries < want * 40 && veins < want; tries++) {
         var x2 = 2 + vrand() % (w - 4), y2 = 2 + vrand() % (h - 4);
@@ -991,10 +952,7 @@
         veins++;
         var run = 3 + vrand() % (onlyIgneous ? 4 : 9);
         for (var k2 = 0; k2 < run; k2++) {
-          if (mat[i2] === MAT.SEDIMENT || mat[i2] === MAT.IGNEOUS) {
-            mat[i2] = kind;
-            if (kind === MAT.GEM) gemCells++; else oreCells++;
-          }
+          if (mat[i2] === MAT.SEDIMENT || mat[i2] === MAT.IGNEOUS) mat[i2] = kind;
           var dir = vrand() % 6, ni = i2;
           if (dir === 0) ni = i2 - 1; else if (dir === 1) ni = i2 + 1;
           else if (dir === 2) ni = i2 - w; else if (dir === 3) ni = i2 + w;
@@ -1076,8 +1034,7 @@
           psortA:psortA, psortB:psortB,
           springs:springs, sinks:sinks, leaking:[], leakSet:new Uint8Array(cells),
           hasAq:hasAq, aqTop:aqTop, vz:clamp(avg + 1, 1, LD - 2),
-          cavCells:cavCells, cavTop:cavTop, oreCells:oreCells, gemCells:gemCells,
-          sLo:sLo, sHi:sHi,
+          cavTop:cavTop,
           ticks:0, moved:0, drained:false, leak:0, dug:0,
           pressMoved:0, pressCells:0 };
     lcur.x = w >> 1; lcur.y = h >> 1;

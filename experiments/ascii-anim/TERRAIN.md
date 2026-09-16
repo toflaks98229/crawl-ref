@@ -467,6 +467,8 @@ assertion stays quiet.
 | `web/terrainkernels.c` | the three kernels, C → wasm32; the build line is in its header |
 | `web/terrainbench.mjs` | the JS mirrors, the A-B harness, the active-set test and the two assertions. Builds the `.wasm` on demand |
 | `web/capabilities.html` | what a browser allows with no server. Open it over `file://` and over `http://` and compare |
+| `web/make-artifact.mjs` | packages the page for a host that supplies its own document skeleton |
+| `web/test/` | four Playwright suites over the real page — `node test/run.mjs`. They drive it through real input; the one thing they need that a player does not is a `window.__wt` accessor, which `test/harness.mjs` appends to a throwaway copy |
 
 ---
 
