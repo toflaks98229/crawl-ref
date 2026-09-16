@@ -139,6 +139,86 @@ function fluidTickJS(lvl, solid, w, h, d) {
   return moved;
 }
 
+// DF's third rule. Line-for-line the same as pressure_tick in the C.
+const zCnt = new Int32Array(64), zPos = new Int32Array(64);
+function byZDesc(src, n, plane, dst) {
+  zCnt.fill(0);
+  let k, z;
+  for (k = 0; k < n; k++) zCnt[(src[k] / plane) | 0]++;
+  for (z = 63, k = 0; z >= 0; z--) { zPos[z] = k; k += zCnt[z]; }
+  for (k = 0; k < n; k++) { z = (src[k] / plane) | 0; dst[zPos[z]++] = src[k]; }
+  return dst;
+}
+
+function pressureTickJS(lvl, solid, w, h, d, stack, comp0, out0, sortA, sortB,
+                        seen, gen, starts, nstarts) {
+  const plane = w * h, total = plane * d;
+  const limit = nstarts < 0 ? total : nstarts;
+  let moved = 0;
+  for (let s = 0; s < limit; s++) {
+    const i0 = nstarts < 0 ? s : starts[s];
+    if (i0 < 0 || i0 >= total) continue;
+    if (seen[i0] === gen || solid[i0] || lvl[i0] !== 7) continue;
+    {                                           // interior only, as fluidTick
+      const z0 = (i0 / plane) | 0, o0 = i0 - z0 * plane;
+      const y0 = (o0 / w) | 0, x0 = o0 - y0 * w;
+      if (x0 < 1 || y0 < 1 || x0 >= w - 1 || y0 >= h - 1) continue;
+    }
+
+    let comp = comp0, out = out0;
+    let sp = 0, n = 0, outN = 0, zTop = -1;
+    stack[sp++] = i0;
+    seen[i0] = gen;
+    while (sp) {
+      const c = stack[--sp];
+      comp[n++] = c;
+      const z = (c / plane) | 0;
+      if (z > zTop) zTop = z;
+      const off = c - z * plane, y = (off / w) | 0, x = off - y * w;
+      for (let k = 0; k < 6; k++) {
+        let j;
+        if (k === 0)      { if (x <= 1)     continue; j = c - 1; }
+        else if (k === 1) { if (x >= w - 2) continue; j = c + 1; }
+        else if (k === 2) { if (y <= 1)     continue; j = c - w; }
+        else if (k === 3) { if (y >= h - 2) continue; j = c + w; }
+        else if (k === 4) { if (z <= 0)     continue; j = c - plane; }
+        else              { if (z >= d - 1) continue; j = c + plane; }
+        if (seen[j] === gen || solid[j]) continue;
+        seen[j] = gen;
+        if (lvl[j] === 7) stack[sp++] = j;
+        else out[outN++] = j;
+      }
+    }
+    comp = byZDesc(comp, n, plane, sortA);
+    out = byZDesc(out, outN, plane, sortB);
+
+    let donor = 0;
+    for (let k = 0; k < outN; k++) {
+      const j = out[k];
+      if (((j / plane) | 0) > zTop) continue;      // never above the head
+      if (j >= plane) {                           // only where water can rest
+        const below = j - plane;
+        if (!solid[below] && lvl[below] < 7) continue;
+      }
+      // the donor must be at least as high as where the unit goes
+      const zdst = (j / plane) | 0;
+      while (donor < n && (lvl[comp[donor]] < 7 ||
+                           ((comp[donor] / plane) | 0) < zdst)) donor++;
+      if (donor >= n) break;
+      lvl[comp[donor]]--;
+      lvl[j]++;
+      moved++;
+    }
+  }
+  return moved;
+}
+
+// The stamp must never repeat in a buffer that is reused, and both the wasm
+// linear memory and the timing harness's repeat runs reuse theirs. A counter
+// that only ever goes up is the whole trick; resetting it per run silently
+// makes a component look already-visited and the two sides diverge.
+let PGEN = 0;
+
 const fr = Math.fround;
 function sumF32(a, n) { let s = 0; for (let i = 0; i < n; i++) s = fr(s + a[i]); return s; }
 function sumU8(a, n)  { let s = 0; for (let i = 0; i < n; i++) s += a[i] * (i % 7 + 1); return s | 0; }
@@ -241,6 +321,39 @@ for (const [w, h, d, fill] of [[128, 128, 3, 40], [256, 256, 4, 40], [256, 256, 
       { med: js.med / TICKS, best: js.best / TICKS },
       { med: wa.med / TICKS, best: wa.best / TICKS },
       same, `${cells / 1e3 | 0}k cells/tick`);
+}
+
+/* 4. the same ticks with pressure on top */
+for (const [w, h, d, fill] of [[128, 128, 3, 40], [256, 256, 4, 40], [256, 256, 4, 90]]) {
+  const cells = w * h * d;
+  grow(cells * 2 + cells * 24 + 64);
+  const O = { lvl: HEAP, solid: HEAP + cells, seen: HEAP + cells * 4,
+              stack: HEAP + cells * 8, comp: HEAP + cells * 12, out: HEAP + cells * 16,
+              sortA: HEAP + cells * 20, sortB: HEAP + cells * 24 };
+  const jsL = new Uint8Array(cells), jsS = new Uint8Array(cells), jsSeen = new Int32Array(cells);
+  const jsStack = new Int32Array(cells), jsComp = new Int32Array(cells), jsOut = new Int32Array(cells);
+  const jsA = new Int32Array(cells), jsB = new Int32Array(cells);
+  const waL = u8(O.lvl, cells), waS = u8(O.solid, cells);
+  const TICKS = 20;
+  const js = time(() => {
+    seedFluid(jsL, jsS, w, h, d, fill);
+    for (let t = 0; t < TICKS; t++) {
+      fluidTickJS(jsL, jsS, w, h, d);
+      pressureTickJS(jsL, jsS, w, h, d, jsStack, jsComp, jsOut, jsA, jsB, jsSeen, ++PGEN, null, -1);
+    }
+  }, 5);
+  const wa = time(() => {
+    seedFluid(waL, waS, w, h, d, fill);
+    for (let t = 0; t < TICKS; t++) {
+      W.fluid_tick(O.lvl, O.solid, w, h, d);
+      W.pressure_tick(O.lvl, O.solid, w, h, d, O.stack, O.comp, O.out, O.sortA, O.sortB, O.seen, ++PGEN, 0, -1);
+    }
+  }, 5);
+  const same = sumU8(jsL, cells) === W.checksum_u8(O.lvl, cells);
+  row("+ pressure", `${w}\u00d7${h}\u00d7${d} = ${(cells / 1e3).toFixed(0)}k, ${fill}% wet`,
+      { med: js.med / TICKS, best: js.best / TICKS },
+      { med: wa.med / TICKS, best: wa.best / TICKS },
+      same, "the body is flooded every tick");
 }
 
 /* -------------------------------------------------------------- table --- */
@@ -418,4 +531,51 @@ console.log("\na permanent source — 256×256×4, a 3×3 spring refilled every 
               `${(activeSum / n).toFixed(0)} active cells, ${ms(msSum / n)}ms/tick`);
   console.log(`the same grid full-scanned: ${ms(fullJS)}ms/tick ` +
               `(${(fullJS / (msSum / n)).toFixed(0)}× the work, for the same water)`);
+}
+
+/* ------------------------------------- what pressure actually costs -------
+ * Gravity and diffusion are local, so an active set bounds them by what
+ * moved. Pressure is not local: to know what a body of water can push, you
+ * have to know the body, and knowing the body means flooding it. So the
+ * question is whether an active set bounds pressure at all.
+ *
+ * One still pool, one opening, one active cell handed in as the only start.
+ * Exactly one unit of water moves each tick whatever the size of the pool.
+ */
+console.log("\none pool, one outlet, one active start — pressure only\n");
+{
+  const w = 256, h = 256, d = 4, plane = w * h, cells = plane * d;
+  console.log(pad("pool cells", 13) + pad("units moved", 13) + pad("ms/tick", 10) + "ns per pool cell");
+  console.log("-".repeat(58));
+  for (const K of [16, 48, 128, 250]) {
+    const lvl = new Uint8Array(cells), solid = new Uint8Array(cells);
+    solid.fill(1);
+    for (let y = 1; y <= K; y++)
+      for (let x = 1; x <= K; x++) { const i = plane + y * w + x; solid[i] = 0; lvl[i] = 7; }
+    const outlet = plane + w + (K + 1);
+    solid[outlet] = 0;
+    const stack = new Int32Array(cells), comp = new Int32Array(cells);
+    const out = new Int32Array(cells), seen = new Int32Array(cells);
+    const sA = new Int32Array(cells), sB = new Int32Array(cells);
+    const start = new Int32Array([plane + w + 1]);
+    let moved = 0;
+    const once = () => {
+      // Restore the exact state each run, in two writes so the reset does not
+      // enter the measurement. The second one is the interesting half: the
+      // donor pressure takes from is the start cell itself, so after one tick
+      // it is no longer 7/7 and would not qualify as a start again. Gating
+      // pressure on an active set has to keep feeding it cells that are full.
+      lvl[outlet] = 0;
+      lvl[start[0]] = 7;
+      moved = pressureTickJS(lvl, solid, w, h, d, stack, comp, out, sA, sB, seen, ++PGEN, start, 1);
+    };
+    for (let k = 0; k < 20; k++) once();          // let the JIT settle first
+    const t = time(once, 15);
+    const n = K * K;
+    console.log(pad(n.toLocaleString(), 13) + pad(moved, 13) + pad(ms(t.med), 10) +
+                (t.med * 1e6 / n).toFixed(0));
+  }
+  console.log("\nThe work is the pool. The movement is one unit either way.");
+  console.log("An active set bounds gravity and diffusion by what moved; it cannot");
+  console.log("bound pressure, because pressure has to find the body first.");
 }

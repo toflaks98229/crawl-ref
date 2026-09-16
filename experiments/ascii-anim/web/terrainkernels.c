@@ -10,6 +10,23 @@
  * can be checksum-compared before their times are compared.
  */
 
+/* clang turns even a sixty-four element clearing loop into a call to memset,
+ * and -nostdlib means nothing supplies one. Freestanding builds have to bring
+ * their own; this is the whole libc this file needs. */
+__attribute__((used))
+void *memset(void *p, int v, __SIZE_TYPE__ n) {
+  unsigned char *b = (unsigned char *)p;
+  while (n--) *b++ = (unsigned char)v;
+  return p;
+}
+__attribute__((used))
+void *memcpy(void *dst, const void *src, __SIZE_TYPE__ n) {
+  unsigned char *d = (unsigned char *)dst;
+  const unsigned char *s = (const unsigned char *)src;
+  while (n--) *d++ = *s++;
+  return dst;
+}
+
 static unsigned int rng;
 
 static inline unsigned int xs32(void) {
@@ -143,6 +160,112 @@ int fluid_tick(unsigned char *lvl, unsigned char *solid, int w, int h, int d) {
           }
         }
       }
+    }
+  }
+  return moved;
+}
+
+/* --- 4. Pressure ---------------------------------------------------------
+ * DF's third rule, and the one that makes a river a river. Gravity and
+ * diffusion are local; pressure is not. A connected body of 7/7 water can
+ * push a unit out of any opening it touches, at or below the z-level of the
+ * highest full tile in the body -- so water crosses a level channel in one
+ * tick instead of dying seven tiles from the source.
+ *
+ * The cost is the point. Finding the body means flooding it, so the work is
+ * proportional to the water, every tick, not to the water that moved. That
+ * is the shape of the most expensive thing in Dwarf Fortress.
+ *
+ * The flow tick only ever touches the interior, so pressure must too. A
+ * border cell it drains can never be refilled by gravity or diffusion, so
+ * pressure refills it itself the next tick and drains it again the tick
+ * after: a ring that moves thousands of units for ever and never settles.
+ * Two rules working on different sets of cells is the bug.
+ *
+ * `starts` limits which cells may open a component; nstarts < 0 scans every
+ * cell, which is the unbounded version. `seen` is stamped with `gen` rather
+ * than cleared -- clearing it would be a pass over every cell, which is the
+ * one thing an active set exists to avoid. `seen`, `stack`, `comp` and `out`
+ * must each hold w*h*d ints.
+ */
+static int zCnt[64], zPos[64];
+
+/* Counting sort by z level, highest first. One pass over a handful of buckets. */
+static int *by_z_desc(const int *src, int n, int plane, int *dst) {
+  int k, z;
+  for (z = 0; z < 64; z++) zCnt[z] = 0;
+  for (k = 0; k < n; k++) zCnt[src[k] / plane]++;
+  for (z = 63, k = 0; z >= 0; z--) { zPos[z] = k; k += zCnt[z]; }
+  for (k = 0; k < n; k++) { z = src[k] / plane; dst[zPos[z]++] = src[k]; }
+  return dst;
+}
+
+int pressure_tick(unsigned char *lvl, unsigned char *solid, int w, int h, int d,
+                  int *stack, int *comp0, int *out0, int *sortA, int *sortB,
+                  int *seen, int gen, const int *starts, int nstarts) {
+  int plane = w * h, total = plane * d, moved = 0;
+  int limit = nstarts < 0 ? total : nstarts;
+
+  for (int s = 0; s < limit; s++) {
+    int i0 = nstarts < 0 ? s : starts[s];
+    if (i0 < 0 || i0 >= total) continue;
+    if (seen[i0] == gen || solid[i0] || lvl[i0] != 7) continue;
+    {   /* interior only, exactly as fluid_tick */
+      int z0 = i0 / plane, o0 = i0 - z0 * plane, y0 = o0 / w, x0 = o0 - y0 * w;
+      if (x0 < 1 || y0 < 1 || x0 >= w - 1 || y0 >= h - 1) continue;
+    }
+
+    int *comp = comp0, *out = out0;
+    int sp = 0, n = 0, outN = 0, zTop = -1;
+    stack[sp++] = i0;
+    seen[i0] = gen;
+    while (sp) {
+      int c = stack[--sp];
+      comp[n++] = c;
+      int z = c / plane;
+      if (z > zTop) zTop = z;
+      int off = c - z * plane, y = off / w, x = off - y * w;
+      for (int k = 0; k < 6; k++) {
+        int j;
+        if (k == 0)      { if (x <= 1)     continue; j = c - 1; }
+        else if (k == 1) { if (x >= w - 2) continue; j = c + 1; }
+        else if (k == 2) { if (y <= 1)     continue; j = c - w; }
+        else if (k == 3) { if (y >= h - 2) continue; j = c + w; }
+        else if (k == 4) { if (z <= 0)     continue; j = c - plane; }
+        else             { if (z >= d - 1) continue; j = c + plane; }
+        if (seen[j] == gen || solid[j]) continue;
+        seen[j] = gen;
+        if (lvl[j] == 7) stack[sp++] = j;
+        else out[outN++] = j;          /* somewhere this body can push into */
+      }
+    }
+
+    comp = by_z_desc(comp, n, plane, sortA);
+    out = by_z_desc(out, outN, plane, sortB);
+
+    /* One unit per opening per tick: that rate limit is what stops pressure
+     * equalising a body instantly. */
+    int donor = 0;
+    for (int k = 0; k < outN; k++) {
+      int j = out[k];
+      if (j / plane > zTop) continue;   /* never higher than the head */
+      /* Only where the water can rest: pushing into a cell with unfilled
+       * space under it just hands the unit to gravity. */
+      if (j >= plane) {
+        int below = j - plane;
+        if (!solid[below] && lvl[below] < 7) continue;
+      }
+      /* And the donor has to be at least as high as where the unit goes.
+       * That is what a head of water means. Leave it out and pressure lifts
+       * a unit that gravity then drops, neither rule wrong on its own, and
+       * together a still body that rings for ever. Both lists are sorted
+       * from the top down, so one forward pointer serves every opening. */
+      int zdst = j / plane;
+      while (donor < n && (lvl[comp[donor]] < 7 || comp[donor] / plane < zdst)) donor++;
+      if (donor >= n) break;
+      lvl[comp[donor]]--;
+      lvl[j]++;
+      moved++;
     }
   }
   return moved;

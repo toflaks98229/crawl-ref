@@ -224,7 +224,7 @@
     forceFull = true;
   }
 
-  var stat = { dirty:0, paintMs:0, tickMs:0, active:0 };
+  var stat = { dirty:0, paintMs:0, tickMs:0, pressMs:0, active:0 };
   function paint() {
     var t0 = performance.now();
     var dirty = 0;
@@ -917,6 +917,9 @@
       }
     }
 
+    var pstack = new Int32Array(cells), pcomp = new Int32Array(cells);
+    var pout = new Int32Array(cells), pseen = new Int32Array(cells);
+    var psortA = new Int32Array(cells), psortB = new Int32Array(cells);
     var cur2 = new Int32Array(cells), nxt = new Int32Array(cells);
     var mark = new Uint8Array(cells), nmark = new Uint8Array(cells);
     var curN = 0;
@@ -925,9 +928,12 @@
     L = { w:w, h:h, d:LD, plane:plane, cells:cells, wi:wi,
           mat:mat, lvl:lvl, magma:magma, surface:surface,
           cur:cur2, nxt:nxt, mark:mark, nmark:nmark, curN:curN,
+          pstack:pstack, pcomp:pcomp, pout:pout, pseen:pseen,
+          psortA:psortA, psortB:psortB,
           springs:springs, sinks:sinks, leaking:[], leakSet:new Uint8Array(cells),
           hasAq:hasAq, aqTop:aqTop, vz:clamp(avg + 1, 1, LD - 2),
-          ticks:0, moved:0, drained:false, leak:0, dug:0 };
+          ticks:0, moved:0, drained:false, leak:0, dug:0,
+          pressMoved:0, pressCells:0 };
     lcur.x = w >> 1; lcur.y = h >> 1;
   }
 
@@ -990,6 +996,128 @@
     L.cur = nxt; L.nxt = cur2;
     L.mark = nmark; L.nmark = mark;
     L.curN = n; L.moved = moved;
+    return moved;
+  }
+
+  // ===========================================================================
+  // Pressure -- DF's third rule, and the one that makes a river a river
+  //
+  // Gravity and diffusion are local, so the active set bounds them by what
+  // actually moved. Pressure is not local. A connected body of 7/7 water can
+  // push a unit out of any opening it touches, at or below the z of the
+  // highest full tile in the body, so water crosses a level channel in one
+  // tick instead of dying seven tiles from the source. To know what a body
+  // can push you have to know the body, and knowing the body means flooding
+  // it -- so the work is the water, every tick, not the water that moved.
+  //
+  // Measured in terrainbench.mjs at 20ns per cell of pool, flat: moving one
+  // unit out of a 64,516-cell pool costs 1.31ms, against 0.03ms a tick for
+  // gravity and diffusion on a running spring. Press R and watch the two
+  // numbers in the status line separate. That is why water is the largest
+  // FPS drain in Dwarf Fortress.
+  //
+  // `pseen` is stamped with a generation rather than cleared, because
+  // clearing it would be a pass over every cell -- exactly the thing the
+  // active set exists to avoid.
+  // ===========================================================================
+  var pgen = 0;
+  var zCnt = new Int32Array(64), zPos = new Int32Array(64);
+  function byZDesc(src, n, plane, dst) {
+    zCnt.fill(0);
+    var k, z;
+    for (k = 0; k < n; k++) zCnt[(src[k] / plane) | 0]++;
+    for (z = 63, k = 0; z >= 0; z--) { zPos[z] = k; k += zCnt[z]; }
+    for (k = 0; k < n; k++) { z = (src[k] / plane) | 0; dst[zPos[z]++] = src[k]; }
+    return dst;
+  }
+  function pressureTick() {
+    var w = L.w, h = L.h, d = L.d, plane = L.plane, total = L.cells;
+    var lvl = L.lvl, mat = L.mat;
+    var stack = L.pstack, seen = L.pseen, comp, out;
+    var starts = L.cur, nstarts = L.curN;
+    var gen = ++pgen, moved = 0, flooded = 0;
+
+    for (var s = 0; s < nstarts; s++) {
+      var i0 = starts[s];
+      if (seen[i0] === gen || mat[i0] || lvl[i0] !== 7) continue;
+      // Interior only, exactly as fluidTick. A border cell pressure drains
+      // can never be refilled by gravity or diffusion, because those skip the
+      // border -- so pressure refills it itself next tick and drains it the
+      // tick after, for ever. Two rules working on different sets of cells is
+      // the bug, and it reads as a sea that will not settle.
+      var z0 = (i0 / plane) | 0, o0 = i0 - z0 * plane;
+      var y0 = (o0 / w) | 0, x0 = o0 - y0 * w;
+      if (x0 < 1 || y0 < 1 || x0 >= w - 1 || y0 >= h - 1) continue;
+
+      // Reset the working buffers for every component: the sort below swaps
+      // them for the scratch pair, and reusing the scratch as the BFS target
+      // would have it sorting an array into itself.
+      comp = L.pcomp; out = L.pout;
+      var sp = 0, n = 0, outN = 0, zTop = -1;
+      stack[sp++] = i0;
+      seen[i0] = gen;
+      while (sp) {
+        var c = stack[--sp];
+        comp[n++] = c;
+        var z = (c / plane) | 0;
+        if (z > zTop) zTop = z;
+        var off = c - z * plane, y = (off / w) | 0, x = off - y * w;
+        for (var k = 0; k < 6; k++) {
+          var j;
+          if (k === 0)      { if (x <= 1)     continue; j = c - 1; }
+          else if (k === 1) { if (x >= w - 2) continue; j = c + 1; }
+          else if (k === 2) { if (y <= 1)     continue; j = c - w; }
+          else if (k === 3) { if (y >= h - 2) continue; j = c + w; }
+          else if (k === 4) { if (z <= 0)     continue; j = c - plane; }
+          else              { if (z >= d - 1) continue; j = c + plane; }
+          if (seen[j] === gen || mat[j]) continue;
+          seen[j] = gen;
+          if (lvl[j] === 7) stack[sp++] = j;
+          else out[outN++] = j;
+        }
+      }
+      flooded += n;
+
+      // Sort the body and its openings by z, highest first, with a counting
+      // sort over the fourteen levels.
+      comp = byZDesc(comp, n, plane, L.psortA);
+      out = byZDesc(out, outN, plane, L.psortB);
+
+      // One unit per opening per tick. That rate limit is what stops a body
+      // equalising in a single frame.
+      var donor = 0;
+      for (var q = 0; q < outN; q++) {
+        var dst = out[q];
+        // Strictly below the head, which is the wiki's "fills to a z-level one
+        // level lower than the source". Allow the head itself and pressure
+        // tops up the body's own surface, gravity pulls it straight back
+        // down, and the two ring for ever: water that never settles never
+        // stops costing, and a still sea sits there burning a millisecond a
+        // tick with nothing to show for it.
+        if (((dst / plane) | 0) > zTop) continue;
+        // And only where the water can rest: pushing into a cell with
+        // unfilled space under it just hands the unit to gravity.
+        if (dst >= plane) {
+          var below = dst - plane;
+          if (!mat[below] && lvl[below] < 7) continue;
+        }
+        // The donor has to be at least as high as where the unit is going.
+        // That is what a head of water means, and leaving it out is what
+        // makes a still sea ring for ever: pressure lifts a unit, gravity
+        // drops it, and neither rule is wrong on its own. Both lists are
+        // sorted by z from the top down, so one forward pointer serves every
+        // opening -- the deeper the opening, the more donors qualify.
+        var zdst = (dst / plane) | 0;
+        while (donor < n && (lvl[comp[donor]] < 7 ||
+                             ((comp[donor] / plane) | 0) < zdst)) donor++;
+        if (donor >= n) break;
+        var src = comp[donor];
+        lvl[src]--; lvl[dst]++; moved++;
+        wakeAround(src); wakeAround(dst);
+      }
+    }
+    L.pressMoved = moved;
+    L.pressCells = flooded;
     return moved;
   }
 
@@ -1077,7 +1205,7 @@
   // That is DF's presentation, and it is the whole reason a z-level map reads
   // at all.
   // ===========================================================================
-  var showLevels = false, paused = false;
+  var showLevels = false, paused = false, pressure = true;
 
   function drawLocal() {
     var ox = V.x + ((V.w - L.w) >> 1), oy = V.y + ((V.h - L.h) >> 1);
@@ -1166,8 +1294,11 @@
     }
     return "level " + rpad(L.vz, 2) + "/" + (L.d - 1)
       + "   dug " + rpad(L.dug, 4)
-      + "   water active " + rpad(L.curN, 6)
-      + "   tick " + stat.tickMs.toFixed(2) + "ms"
+      + "   active " + rpad(L.curN, 5)
+      + "   flow " + stat.tickMs.toFixed(2) + "ms"
+      + "   pressure " + (pressure
+          ? stat.pressMs.toFixed(2) + "ms over " + rpad(L.pressCells, 5) + " cells"
+          : "off")
       + (L.hasAq ? ("   aquifer at " + L.aqTop + (L.leaking.length ? " LEAKING" : "")) : "   no aquifer")
       + (L.springs.length ? (L.curN ? "   river draining" : "   river settled") : "")
       + (paused ? "   PAUSED" : "")
@@ -1176,7 +1307,7 @@
   function keysLine() {
     return mode === "world"
       ? "[G] another world   [arrows/WASD] cursor   [Enter] embark here"
-      : "[,/.] level   [D] dig   [W] water   [F] fill levels   [P] pause   [V] verify   [Esc] world map";
+      : "[,/.] level  [D] dig  [W] water  [R] pressure  [F] fill levels  [P] pause  [V] verify  [Esc] map";
   }
 
   function drawBusy() {
@@ -1240,6 +1371,7 @@
     else if (lk === "f") { showLevels = !showLevels; }
     else if (lk === "p") { paused = !paused; }
     else if (lk === "v") { verify(); }
+    else if (lk === "r") { pressure = !pressure; L.drained = false; }
   });
 
   var dragging = false;
@@ -1308,12 +1440,23 @@
           wakeAround(L.sinks[q]);
         }
         if (L.leaking.length && L.ticks % 3 === 0) seepTick();
+        // Pressure goes first, on the set the springs and the mouth have
+        // just woken. Running it after the flow tick means running it on the
+        // set the flow tick produced, which is empty the moment the water
+        // settles -- so pressure would never fire again and the river would
+        // never restart. What it moves is woken here and picked up by the
+        // flow tick in the same tick.
+        if (pressure) {
+          var pt0 = performance.now();
+          pressureTick();
+          stat.pressMs = stat.pressMs * 0.85 + (performance.now() - pt0) * 0.15;
+        } else { L.pressMoved = 0; L.pressCells = 0; stat.pressMs *= 0.9; }
         var had = L.curN;
         fluidTick();
         // Ship the assertion, not just the benchmark: the first time the set
         // drains, prove it drained because the water settled and not because
         // a wake-up was missed. If it was missed, say so and recover.
-        if (had > 0 && L.curN === 0 && !L.drained) {
+        if (had > 0 && L.curN === 0 && !L.pressMoved && !L.drained) {
           L.drained = true;
           var missed = fullScanTick();
           if (missed > 0) { L.leak = missed; reseedActive(); }

@@ -328,10 +328,7 @@ inherently costly — gravity and diffusion on an active set are almost free,
 measured at 0.03ms a tick — but because the rule that makes water interesting
 is a search, and DF runs it over the whole map.
 
-So the costing in §6 stands, with one correction to its scope: the per-frame
-work that fits in 0.03ms is fluid **without** pressure. Pressure is unmeasured
-here and is the next thing to measure, because it is the one part of this
-that could plausibly change the language answer.
+Section 10 is pressure, built and measured.
 
 Two smaller notes from the same build. Diffusion had to be switched to
 **averaging** the two tiles (the wiki's rule) rather than moving one unit;
@@ -345,11 +342,92 @@ the land.
 
 ---
 
+## 10. Pressure, measured
+
+Implemented in all four places — the kernel, its JS mirror, and the page —
+and checksum-compared, so the figures below are an A-B of the same algorithm.
+A connected body of 7/7 water can push a unit out of any opening it touches;
+finding the body means flooding it.
+
+**What it costs on a full scan.** Roughly double.
+
+| scale | flow only, JS | with pressure, JS | wasm |
+|---|---|---|---|
+| 128×128×3 = 49k, 40% wet | 0.44 | 0.85 | 0.41 |
+| 256×256×4 = 262k, 40% wet | 2.11 | 4.14 | 2.20 |
+| 256×256×4 = 262k, 90% wet | 2.75 | 6.66 | 4.10 |
+
+**What it costs on an active set — which is the question.** One still pool,
+one opening, one active cell handed in as the only start. Exactly one unit of
+water moves, whatever the size of the pool:
+
+| pool cells | units moved | ms | ns per pool cell |
+|---|---|---|---|
+| 256 | 1 | 0.07 | 279 |
+| 2,304 | 1 | 0.05 | 24 |
+| 16,384 | 1 | 0.40 | 24 |
+| 62,500 | 1 | 1.57 | 25 |
+
+Flat, at about 24ns a cell. **The work is the pool; the movement is one unit
+either way.** An active set bounds gravity and diffusion by what moved. It
+cannot bound pressure, because pressure has to find the body before it knows
+whether anything can move at all.
+
+Against the 0.03ms a tick that gravity and diffusion cost on a permanently
+running spring, moving a single unit out of a 62,500-cell pool is **fifty
+times that**. That is the answer to the question §3 opened, with a number on
+it: water is DF's largest FPS drain because the rule that makes water
+interesting is a search, and DF runs it over the whole map.
+
+**In the prototype.** Press R. With pressure off the river is a chain of
+still pools that settles in a few seconds and then costs nothing. With it on
+the same river runs indefinitely, at 0.007ms a tick, because the body it has
+to flood is only the few cells still full. Embark on an ocean instead and
+disturb it: 11,706 cells flooded per tick to move a handful of units,
+0.075ms, until it settles again and drops to zero. Both numbers are in the
+status line while you play.
+
+### Three rules it does not work without
+
+All three were found the same way — a sea that would not settle, ringing at
+three thousand units a tick for ever with the water total unchanged.
+
+1. **The same cells as the flow tick.** The flow tick only touches the
+   interior. A border cell pressure drains can never be refilled by gravity
+   or diffusion, so pressure refills it itself next tick and drains it again
+   the tick after. Two rules operating on different sets of cells is the bug.
+2. **Only where the water can rest.** Pushing into a cell with unfilled space
+   under it just hands the unit to gravity, which drops it back into the body.
+3. **The donor must be at least as high as the destination.** That is what a
+   head of water means. Without it, pressure lifts a unit and gravity drops
+   it, and neither rule is wrong on its own. Both the body and its openings
+   are counting-sorted by level, highest first, so one forward pointer serves
+   every opening.
+
+None of these change the cost, and all three are the difference between water
+that settles and water that never stops billing.
+
+### It does not change the language answer
+
+Pressure roughly doubles the per-tick cost, and wasm is still worth about 2×
+on it — the same factor as everything else here. The lever remains the
+algorithm: what pressure costs is decided by how much water is in one
+connected body and how often something disturbs it, not by the language it is
+written in. What it does add is a real reason to reach for wasm eventually,
+since it is the first part of this that a big map could make expensive.
+
+One implementation note for the wasm side: `-nostdlib` is not quite nothing.
+clang turns even a sixty-four element clearing loop into a call to `memset`,
+so a freestanding build has to supply one. That is the whole libc
+`terrainkernels.c` needs.
+
+---
+
 ## Files
 
 | file | what |
 |---|---|
-| `web/watertable.html` | the prototype: world generation in a worker, biome by threshold, carved rivers, rejection, z-levels, and fluid on an active set |
+| `web/watertable.html` | the prototype: world generation in a worker, biome by threshold, carved rivers, rejection, z-levels, fluid on an active set, and pressure on a toggle |
 | `web/terrainkernels.c` | the three kernels, C → wasm32; the build line is in its header |
 | `web/terrainbench.mjs` | the JS mirrors, the A-B harness, the active-set test and the two assertions. Builds the `.wasm` on demand |
 | `web/capabilities.html` | what a browser allows with no server. Open it over `file://` and over `http://` and compare |
