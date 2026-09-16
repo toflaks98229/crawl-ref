@@ -182,6 +182,7 @@ Crawl의 ASCII 애니메이션은 전부 **딱 세 가지 원시 연산**으로 
 | `test_anim.py` | 38개 검증 항목 |
 | `TERRAIN.md` | 드워프 포트리스식 지형 생성·유체 조사와 언어·엔진 결론 (JS vs wasm 실측 포함) |
 | `GAMES.md` | 외부 ASCII 게임 조사 — 장르별로 무엇이 증명됐고 다음 견본에 어떤 비용이 드는지 |
+| `web/watertable.html` | 드워프 포트리스식 지형 생성 + 유체 견본 (TERRAIN.md 아키텍처 구현) |
 | `web/` | 브라우저 견본들. `web/horde.html`이 본 프로젝트, `web/BACKLOG.md`·`web/BENCH.md`가 그 문서 |
 
 각 이식 클래스는 원본 위치를 주석으로 달아뒀으므로, 상류 코드가 바뀌면

@@ -99,20 +99,20 @@ Node v22, no GPU, medians of 3–7 runs.
 
 | kernel | scale | JS ms | wasm ms | wasm/JS |
 |---|---|---|---|---|
-| diamond-square | 257² = 66k | 1.50 | 0.39 | 0.26× |
-| diamond-square | 513² = 263k | 5.02 | 0.84 | 0.17× |
-| diamond-square | 1025² = 1,051k | 21.6 | 3.49 | 0.16× |
-| diamond-square | 2049² = 4,198k | 84.8 | 14.0 | 0.16× |
-| gen + carve | 513², 200 rivers | 10.5 | 2.65 | 0.25× |
-| gen + carve | 1025², 800 rivers | 28.5 | 5.93 | 0.21× |
-| fluid tick | 128×128×3 = 49k, 40% wet | 0.44 | 0.21 | 0.47× |
-| fluid tick | 256×256×4 = 262k, 40% wet | 2.03 | 1.03 | 0.51× |
-| fluid tick | 256×256×4 = 262k, 90% wet | 2.71 | 1.34 | 0.49× |
+| diamond-square | 257² = 66k | 1.36 | 0.37 | 0.27× |
+| diamond-square | 513² = 263k | 4.39 | 0.81 | 0.18× |
+| diamond-square | 1025² = 1,051k | 17.5 | 3.48 | 0.20× |
+| diamond-square | 2049² = 4,198k | 70.8 | 13.8 | 0.20× |
+| gen + carve | 513², 200 rivers | 9.96 | 2.73 | 0.27× |
+| gen + carve | 1025², 800 rivers | 25.8 | 6.21 | 0.24× |
+| fluid tick | 128×128×3 = 49k, 40% wet | 0.53 | 0.22 | 0.41× |
+| fluid tick | 256×256×4 = 262k, 40% wet | 2.06 | 1.10 | 0.53× |
+| fluid tick | 256×256×4 = 262k, 90% wet | 3.01 | 1.37 | 0.46× |
 
 Two things fall straight out:
 
 **Generation is not a performance question.** A whole DF-medium heightfield is
-85ms in plain JavaScript, once, at world creation. Carving 800 rivers into a
+71ms in plain JavaScript, once, at world creation. Carving 800 rivers into a
 1025² field is 28.5ms. There is nothing to optimise here.
 
 **wasm's win is real but bounded** — 5–6× on the float-heavy generation,
@@ -130,21 +130,21 @@ once:
 
 | tick | active cells | ms | units moved |
 |---|---|---|---|
-| 1 | 26,303 | 9.30 | 168,405 |
-| 2 | 118,972 | 17.5 | 171,326 |
-| 3 | 168,276 | 6.73 | 172,705 |
-| 10 | 4,273 | 0.11 | 198 |
-| 15 | 0 | 0.00 | settled |
+| 1 | 26,303 | 8.93 | 176,499 |
+| 2 | 118,922 | 14.7 | 184,904 |
+| 3 | 168,861 | 6.69 | 180,841 |
+| 10 | 749 | 0.02 | 19 |
+| 13 | 0 | 0.00 | settled |
 
-`full scan: 2.13ms/tick in JS, 1.06ms/tick in wasm — every tick, forever.`
-`active set: 61.3ms for all 400 ticks in JS (0.15ms average).`
+`full scan: 2.20ms/tick in JS, 1.07ms/tick in wasm — every tick, forever.`
+`active set: 52.9ms for all 400 ticks in JS (0.13ms average).`
 
 And the case that decides whether a map can have rivers at all — a spring
 refilled to 7/7 every tick, forever, measured over the last 100 of 400 ticks:
 
 ```
-steady state: 607 active cells, 0.03ms/tick
-the same grid full-scanned: 2.13ms/tick  (75× the work, for the same water)
+steady state: 746 active cells, 0.03ms/tick
+the same grid full-scanned: 2.20ms/tick  (75× the work, for the same water)
 ```
 
 **The algorithm is worth 75×. The language is worth 2×.**
@@ -225,6 +225,11 @@ beyond clang, and inlined as base64 so nothing about delivery changes.
 reference implementation and the checksum oracle, exactly as the benchmark
 does.
 
+One note on the fluid kernel, since the numbers above depend on it: diffusion
+**averages** the two tiles, which is the rule the wiki describes. Moving a
+single unit instead looks identical once the water is at rest and is wrong in
+motion — see §9.
+
 **Not Rust, for this.** Rust is the better language and the wrong trade here: it
 adds cargo, `wasm-bindgen` and a build pipeline to win the same 2–5× that 200
 lines of C already wins with one clang invocation. Revisit if a kernel ever
@@ -249,6 +254,8 @@ that actually transfers.
 
 ## 8. So what the prototype looks like
 
+Built, in `web/watertable.html`. Section 9 is what building it changed.
+
 - **Fields, not features.** Elevation, rainfall, temperature, drainage and
   volcanism as `Float32Array` layers; biome by threshold, DF-style.
   `diamond_square` is step one and is written.
@@ -272,10 +279,77 @@ that actually transfers.
 
 ---
 
+## 9. What building it changed
+
+Five things only showed up once there was a world on screen. Four were bugs in
+this design; the fifth is a property of DF's rules and is the most useful
+result here.
+
+**Depression filling is not optional.** "Walk downhill, dig when stuck" is
+DF's own description and on raw fractal terrain it produces worlds with
+**zero river mouths** — every river dies in an inland basin. Running a
+priority flood first, so that every cell outside a genuine depression has a
+downhill path to the border, is what makes DF's rule terminate at the sea.
+The cells the flood had to raise are exactly the lakes, so it pays for itself
+twice. It costs about 60ms of the 150.
+
+**The epsilon in that flood is for routing only.** Filling with
+`parent + ε` gives flats a direction to run in, but ε accumulates along every
+path, so after a few hundred cells `filled > elev` is true nearly everywhere.
+Reading lakes off it called a whole continent a lake. Lakes have to come off
+the epsilon-free water level, carried alongside.
+
+**A fixed sea level against a renormalised fractal is meaningless.** It gave
+82% land. Sea level is a parameter: pick the height that leaves the land
+fraction this attempt asked for. Land fraction then stops being a rejection
+test and the coastline ratio takes its place, which is the test that actually
+bites.
+
+**A histogram taken over the whole map puts all the land in half the scale.**
+Rain over the sea is always near maximum and the sea is half the map, so
+flattening rain onto its own distribution over every cell left nowhere on land
+reading above 50 — a world with no forest anywhere, on any seed. The
+distribution has to be measured over land only. DF's parameters are weighted
+ranges on a 0-100 scale and its biome rules are thresholds on it; they only
+line up if the field is actually spread across that scale.
+
+**DF's two cheap rules give you ponds, not rivers.** This is the one worth
+carrying forward. Gravity and diffusion move water, and diffusion only fires
+when two neighbours differ by two or more, so a tile holding 1 is stuck for
+good. Fill a 119-tile channel and it drains hard toward its mouth for a few
+seconds and then stops — a chain of still pools. Nothing is wrong: that is
+what those two rules do.
+
+The rule that makes a river run is the third one, **pressure**, and pressure
+is the expensive one: it has to search a connected body of water every tick
+rather than look at six neighbours. Which is the answer to the question §3
+started with. Water is DF's largest FPS drain not because fluid simulation is
+inherently costly — gravity and diffusion on an active set are almost free,
+measured at 0.03ms a tick — but because the rule that makes water interesting
+is a search, and DF runs it over the whole map.
+
+So the costing in §6 stands, with one correction to its scope: the per-frame
+work that fits in 0.03ms is fluid **without** pressure. Pressure is unmeasured
+here and is the next thing to measure, because it is the one part of this
+that could plausibly change the language answer.
+
+Two smaller notes from the same build. Diffusion had to be switched to
+**averaging** the two tiles (the wiki's rule) rather than moving one unit;
+the two settle identically, so the benchmark's conclusions did not move, but
+the one-unit version cannot carry water more than about seven tiles from a
+source. And an overview that samples the world down needs to let a **river**
+win its block outright while everything else goes by majority: give an areal
+biome the same override and at ten tiles to a cell it swallows the map,
+because nearly every block contains one tile of anything covering a sixth of
+the land.
+
+---
+
 ## Files
 
 | file | what |
 |---|---|
+| `web/watertable.html` | the prototype: world generation in a worker, biome by threshold, carved rivers, rejection, z-levels, and fluid on an active set |
 | `web/terrainkernels.c` | the three kernels, C → wasm32; the build line is in its header |
 | `web/terrainbench.mjs` | the JS mirrors, the A-B harness, the active-set test and the two assertions. Builds the `.wasm` on demand |
 | `web/capabilities.html` | what a browser allows with no server. Open it over `file://` and over `http://` and compare |

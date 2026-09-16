@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watertable</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* No chrome to style: the world map, the local map, the legend, the status
+     lines and the frame are all characters in one grid on one canvas. */
+  :root { --ground: #06060d; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--ground); overflow: hidden;
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #screen { display: block; width: 100%; height: 100%; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1 class="sr">Watertable &mdash; a Dwarf&nbsp;Fortress-shaped terrain and fluid study</h1>
+<p class="sr">
+  On the world map: move the cursor with the arrow keys or WASD, press G to
+  generate another world, and Enter to embark on the tile under the cursor.
+  Underground: comma and full stop change level, D digs out the tile under the
+  cursor, W pours water into it, F shows fill levels as digits, P pauses the
+  water, and Escape returns to the world map.
+</p>
+<p class="sr" id="say" aria-live="polite" role="status"></p>
+<canvas id="screen"></canvas>
+
+<script>
+(function () {
+  "use strict";
+
+  // ===========================================================================
+  // Watertable
+  //
+  // Terrain the way Dwarf Fortress does it, on the architecture measured in
+  // experiments/ascii-anim/TERRAIN.md:
+  //
+  //   fields, not features   five scalar layers; biome is read off them by
+  //                          threshold rather than placed
+  //   carve, don't draw      rivers walk downhill and dig when stuck
+  //   reject, don't tune     generate loosely, throw the world away if it
+  //                          fails its requirements, re-roll
+  //   generate off-thread    in a blob worker, results handed back as
+  //                          transferable buffers (verified over file://)
+  //   active set, not scan   water touches only cells that moved last tick
+  //                          plus what they disturbed: 0.03ms/tick for a
+  //                          permanent spring against 2.13ms full-scanned
+  //   map the field          the renderer is a value-to-glyph map with no
+  //                          timeline in it; motion is emergent, as in DF
+  //
+  // Two views, and they answer the 1:2 console cell differently on purpose.
+  //
+  //   The world map is about shape, so it must not be stretched. Each cell
+  //   carries two world rows as a half block with its own background colour,
+  //   which is the CP437-safe way to get a second vertical sample.
+  //
+  //   The local map is about reading tiles, so it is one tile per cell and
+  //   stretched two to one -- which is exactly what DF looks like in a real
+  //   console, and what everyone who plays it reads without noticing.
+  // ===========================================================================
+
+  var CELL_W = 12, CELL_H = 24;
+
+  // --- palette --------------------------------------------------------------
+  var PAL = [
+    "#06060d", // 0  void / page ground
+    "#0b1430", // 1  deep ocean
+    "#13285c", // 2  ocean
+    "#22498f", // 3  shallow sea
+    "#2f7fb8", // 4  lake
+    "#58b0e0", // 5  river
+    "#c9a44c", // 6  desert
+    "#9c6b3f", // 7  badlands
+    "#437f3c", // 8  grassland
+    "#94a03f", // 9  savanna
+    "#1d5527", // 10 forest
+    "#3c6349", // 11 swamp
+    "#4d7259", // 12 marsh
+    "#93a6ac", // 13 tundra
+    "#dceaf2", // 14 glacier
+    "#797982", // 15 mountain
+    "#ccccd6", // 16 peak
+    "#e8e8f0", // 17 ink
+    "#7a7a8a", // 18 dim
+    "#4a4668", // 19 frame
+    "#8f88b8", // 20 label
+    "#ff6b6b", // 21 warn
+    "#7ee07e", // 22 good
+    "#2b2745", // 23 rule
+    "#5a4632", // 24 soil near
+    "#3e3024", // 25 soil mid
+    "#2a2018", // 26 soil far
+    "#565159", // 27 rock near
+    "#3b373d", // 28 rock mid
+    "#282529", // 29 rock far
+    "#42606f", // 30 aquifer near
+    "#2e434e", // 31 aquifer mid
+    "#202f36", // 32 aquifer far
+    "#2d5f92", // 33 water 1-2
+    "#3f86c4", // 34 water 3-4
+    "#63b2e8", // 35 water 5-6
+    "#a6dcff", // 36 water 7
+    "#12121f", // 37 sky / open
+    "#d24b16", // 38 magma
+    "#151a2c"  // 38+ panel ground
+  ];
+  var C = { ink:17, dim:18, frame:19, label:20, warn:21, good:22, rule:23,
+            sky:37, panel:39 };
+
+  // The alphabet this page draws with. Box drawing and the three half blocks
+  // are the only things outside ASCII; both are CP437 and both are already
+  // proven in this repo.
+  var GLYPHS = (" .,'\"`:;*#@%^~=-+|/\\_<>()[]{}!?$&0123456789"
+    + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    + "≈·▀▄█"
+    + "═║╔╗╚╝"
+    + "─│┌┐└┘").split("");
+  var GI = {};
+  GLYPHS.forEach(function (g, i) { if (GI[g] === undefined) GI[g] = i; });
+  var G_UPPER = GI["▀"], G_FULL = GI["█"];
+
+  // The shading ramp, dim to bright. Water depth reads off it.
+  var RAMP = ".,-~:;=!*#$@".split("").map(function (ch) { return GI[ch]; });
+
+  function pad(s, n) { s = String(s); return s.length >= n ? s : s + " ".repeat(n - s.length); }
+  function rpad(s, n) { s = String(s); return s.length >= n ? s : " ".repeat(n - s.length) + s; }
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  // ===========================================================================
+  // Painting
+  //
+  // Same contract as the survivors-like: every write carries a layer and only
+  // lands if it is at least as high as what is already in the cell, so call
+  // order stops mattering. One addition -- a cell also carries a background
+  // colour, which is what lets a half block hold two world rows.
+  //
+  // cell = glyph << 16 | fg << 8 | bg
+  // ===========================================================================
+  var Z = { GROUND:1, WATER:2, MARK:3, NUM:4, UI:5 };
+
+  var cv = document.getElementById("screen");
+  var ctx = cv.getContext("2d", { alpha: false });
+  var cols = 0, rows = 0, buf = null, zbuf = null, prev = null, forceFull = true;
+
+  function put(cx, cy, g, fg, z, bg) {
+    cx |= 0; cy |= 0;
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+    var i = cy * cols + cx;
+    if (z < zbuf[i]) return;
+    zbuf[i] = z;
+    buf[i] = g << 16 | fg << 8 | (bg || 0);
+  }
+  function putStr(cx, cy, s, fg, z, bg) {
+    for (var i = 0; i < s.length; i++) {
+      var gi = GI[s.charAt(i)];
+      if (gi !== undefined) put(cx + i, cy, gi, fg, z, bg);
+    }
+  }
+  function hfill(x, y, w, ch, fg, z, bg) {
+    var gi = GI[ch];
+    for (var i = 0; i < w; i++) put(x + i, y, gi, fg, z, bg);
+  }
+  // Two world rows in one cell: the upper half takes the foreground, the lower
+  // half takes the background. Identical halves collapse to a full block so a
+  // flat sea is one solid colour rather than a seam.
+  function putHalf(cx, cy, top, bottom, z) {
+    if (top === bottom) put(cx, cy, G_FULL, top, z, top);
+    else put(cx, cy, G_UPPER, top, z, bottom);
+  }
+  // A container frame, double line. Nested things use the single line.
+  function panel(x, y, w, h, fg) {
+    for (var i = 1; i < w - 1; i++) {
+      put(x + i, y, GI["═"], fg, Z.UI, C.panel);
+      put(x + i, y + h - 1, GI["═"], fg, Z.UI, C.panel);
+    }
+    for (var j = 1; j < h - 1; j++) {
+      put(x, y + j, GI["║"], fg, Z.UI, C.panel);
+      put(x + w - 1, y + j, GI["║"], fg, Z.UI, C.panel);
+      hfill(x + 1, y + j, w - 2, " ", fg, Z.UI, C.panel);
+    }
+    put(x, y, GI["╔"], fg, Z.UI, C.panel);
+    put(x + w - 1, y, GI["╗"], fg, Z.UI, C.panel);
+    put(x, y + h - 1, GI["╚"], fg, Z.UI, C.panel);
+    put(x + w - 1, y + h - 1, GI["╝"], fg, Z.UI, C.panel);
+  }
+  function bar(x, y, w, frac, cFull, cEmpty) {
+    var inner = w - 2;
+    var n = clamp(Math.round(frac * inner), 0, inner);
+    put(x, y, GI["["], cEmpty, Z.UI);
+    for (var i = 0; i < inner; i++)
+      put(x + 1 + i, y, GI[i < n ? "=" : "-"], i < n ? cFull : cEmpty, Z.UI);
+    put(x + w - 1, y, GI["]"], cEmpty, Z.UI);
+  }
+
+  var V = { x:1, y:3, w:10, h:10 };        // the view area, in cells
+  function resize() {
+    var w = window.innerWidth, h = window.innerHeight;
+    CELL_W = clamp(Math.floor(w / 118), 6, 15);
+    CELL_H = CELL_W * 2;                    // the console box: 1 wide, 2 tall
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cols = Math.max(60, Math.floor(w / CELL_W));
+    rows = Math.max(20, Math.floor(h / CELL_H));
+    cv.width = Math.round(cols * CELL_W * dpr);
+    cv.height = Math.round(rows * CELL_H * dpr);
+    cv.style.width = (cols * CELL_W) + "px";
+    cv.style.height = (rows * CELL_H) + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.font = Math.round(CELL_H * 0.76) + "px " +
+      getComputedStyle(document.body).fontFamily;
+    buf = new Int32Array(cols * rows);
+    zbuf = new Uint8Array(cols * rows);
+    prev = new Int32Array(cols * rows).fill(-1);
+    // rows: 0 frame, 1 title, 2 rule, [view], rule, status, keys, frame
+    V.x = 1; V.y = 3; V.w = cols - 2; V.h = Math.max(6, rows - 7);
+    forceFull = true;
+  }
+
+  var stat = { dirty:0, paintMs:0, tickMs:0, active:0 };
+  function paint() {
+    var t0 = performance.now();
+    var dirty = 0;
+    for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+      var i = y * cols + x, v = buf[i];
+      if (!forceFull && prev[i] === v) continue;
+      prev[i] = v; dirty++;
+      ctx.fillStyle = PAL[v & 255] || PAL[0];
+      ctx.fillRect(x * CELL_W, y * CELL_H, CELL_W, CELL_H);
+      var gi = v >> 16;
+      if (gi) {
+        ctx.fillStyle = PAL[(v >> 8) & 255] || PAL[17];
+        ctx.fillText(GLYPHS[gi], x * CELL_W + CELL_W / 2, y * CELL_H + CELL_H / 2);
+      }
+    }
+    forceFull = false;
+    stat.dirty = dirty;
+    stat.paintMs = stat.paintMs * 0.9 + (performance.now() - t0) * 0.1;
+  }
+
+  // ===========================================================================
+  // World generation, in a worker
+  //
+  // Generating a 513-square world is 85ms of plain JavaScript and rejection
+  // means doing it several times over, so it runs off the main thread and the
+  // frame never stutters. A blob worker and transferable buffers both work
+  // from file:// with no server -- capabilities.html is the proof -- which is
+  // why neither a build step nor SharedArrayBuffer appears anywhere here.
+  //
+  // The function is stringified into the blob, so it must not close over
+  // anything outside itself.
+  // ===========================================================================
+  function workerMain() {
+    var rng = 1;
+    function xs32() { var x = rng; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (rng = x >>> 0); }
+    function frand() { return (xs32() >>> 8) * (1 / 16777216); }
+
+    // Midpoint displacement: seed the corners, fill the space fractally.
+    // DF's elevation comes out of exactly this.
+    function diamondSquare(h, n, seed, rough) {
+      rng = seed >>> 0 || 1;
+      var size = n - 1;
+      h[0] = frand(); h[size] = frand();
+      h[size * n] = frand(); h[size * n + size] = frand();
+      var scale = 1;
+      for (var step = size; step > 1; step >>= 1) {
+        var half = step >> 1, x, y;
+        for (y = 0; y < size; y += step)
+          for (x = 0; x < size; x += step) {
+            var a = h[y * n + x], b = h[y * n + x + step];
+            var c = h[(y + step) * n + x], d = h[(y + step) * n + x + step];
+            h[(y + half) * n + (x + half)] = (a + b + c + d) * 0.25 + (frand() - 0.5) * scale;
+          }
+        for (y = 0; y <= size; y += half) {
+          var x0 = ((y / half) & 1) ? 0 : half;
+          for (x = x0; x <= size; x += step) {
+            var sum = 0, cnt = 0;
+            if (x >= half)         { sum += h[y * n + x - half];   cnt++; }
+            if (x + half <= size)  { sum += h[y * n + x + half];   cnt++; }
+            if (y >= half)         { sum += h[(y - half) * n + x]; cnt++; }
+            if (y + half <= size)  { sum += h[(y + half) * n + x]; cnt++; }
+            h[y * n + x] = sum / cnt + (frand() - 0.5) * scale;
+          }
+        }
+        scale *= rough;
+      }
+      return h;
+    }
+    function norm(h) {
+      var lo = Infinity, hi = -Infinity, i;
+      for (i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
+      var d = hi - lo || 1;
+      for (i = 0; i < h.length; i++) h[i] = (h[i] - lo) / d;
+      return h;
+    }
+    function field(n, seed, rough) { return norm(diamondSquare(new Float32Array(n * n), n, seed, rough)); }
+
+    // Flatten a field onto its own distribution, so the 0-100 scale means
+    // percentile. DF's parameters are weighted ranges over that scale and its
+    // biome rules are thresholds on it, which only line up if the field is
+    // spread evenly. A fractal is bunched in the middle and a rain shadow is
+    // worse -- a handful of cliff cells take the whole top of the range and
+    // everything else lands under 20, which is how you get a world where
+    // nowhere is wet enough to start a river.
+    // `keep` restricts which cells the distribution is measured over, and it
+    // is not optional. Rain over the sea is always near maximum, and the sea
+    // is half the map, so a histogram taken over everything puts the whole of
+    // the land in the bottom half of the scale -- a world with no forest
+    // anywhere, because nowhere on land ever reads above 50.
+    function histNorm(f, keep) {
+      var B = 1024, h = new Int32Array(B), i, lo = Infinity, hi = -Infinity, n = 0;
+      for (i = 0; i < f.length; i++) {
+        if (keep && !keep(i)) continue;
+        if (f[i] < lo) lo = f[i];
+        if (f[i] > hi) hi = f[i];
+      }
+      if (!(hi > lo)) return f;
+      var d = hi - lo;
+      function bin(v) { var b = ((v - lo) / d * B) | 0; return b < 0 ? 0 : b >= B ? B - 1 : b; }
+      for (i = 0; i < f.length; i++) { if (keep && !keep(i)) continue; h[bin(f[i])]++; n++; }
+      var cdf = new Float32Array(B), acc = 0;
+      for (i = 0; i < B; i++) { acc += h[i]; cdf[i] = acc / n; }
+      for (i = 0; i < f.length; i++) f[i] = cdf[bin(f[i])];
+      return f;
+    }
+
+    // Priority flood (Barnes, Lehman & Mulla). Every cell outside a genuine
+    // depression gets a downhill path to the border, and the cells that had
+    // to be raised to get one are exactly the lakes.
+    //
+    // This is not in DF's description and it is what makes DF's description
+    // work: "walk downhill, dig when stuck" only reaches the sea if the
+    // basins between here and the sea have already been accounted for.
+    // Without it, rivers die inland and a world has no river mouths at all.
+    var DX4 = [1, -1, 0, 0], DY4 = [0, 0, 1, -1];
+    // Returns two things, and the distinction matters. `filled` carries an
+    // epsilon so that flats still have a direction to run in -- that is what
+    // makes routing terminate. `lake` is read off the epsilon-free water
+    // level instead, because the epsilon accumulates along every path, so
+    // after a few hundred cells `filled > elev` is true almost everywhere and
+    // a whole continent gets called a lake.
+    function fillDepressions(elev, n) {
+      var cells = n * n;
+      var filled = new Float32Array(elev);
+      var level = new Float32Array(elev);   // water level here, no epsilon
+      var lake = new Uint8Array(cells);
+      var closed = new Uint8Array(cells);
+      var hi = new Int32Array(cells), hk = new Float32Array(cells), hn = 0;
+      function push(i, k) {
+        var c = hn++; hi[c] = i; hk[c] = k;
+        while (c > 0) {
+          var pa = (c - 1) >> 1;
+          if (hk[pa] <= hk[c]) break;
+          var ti = hi[pa]; hi[pa] = hi[c]; hi[c] = ti;
+          var tk = hk[pa]; hk[pa] = hk[c]; hk[c] = tk;
+          c = pa;
+        }
+      }
+      function pop() {
+        var top = hi[0];
+        hn--;
+        if (hn > 0) {
+          hi[0] = hi[hn]; hk[0] = hk[hn];
+          for (var c = 0;;) {
+            var l = c * 2 + 1, r = l + 1, m = c;
+            if (l < hn && hk[l] < hk[m]) m = l;
+            if (r < hn && hk[r] < hk[m]) m = r;
+            if (m === c) break;
+            var ti = hi[m]; hi[m] = hi[c]; hi[c] = ti;
+            var tk = hk[m]; hk[m] = hk[c]; hk[c] = tk;
+            c = m;
+          }
+        }
+        return top;
+      }
+      function seed(i) { if (!closed[i]) { closed[i] = 1; push(i, level[i]); } }
+      for (var x = 0; x < n; x++) { seed(x); seed((n - 1) * n + x); }
+      for (var y = 0; y < n; y++) { seed(y * n); seed(y * n + n - 1); }
+      var EPS = 1e-5;
+      while (hn > 0) {
+        var c2 = pop(), cx = c2 % n, cy = (c2 / n) | 0;
+        for (var d = 0; d < 4; d++) {
+          var nx = cx + DX4[d], ny = cy + DY4[d];
+          if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+          var j = ny * n + nx;
+          if (closed[j]) continue;
+          closed[j] = 1;
+          var lv = level[c2];
+          if (elev[j] < lv) { level[j] = lv; lake[j] = 1; }
+          if (filled[j] <= filled[c2]) filled[j] = filled[c2] + EPS;
+          push(j, level[j]);
+        }
+      }
+      return { filled: filled, lake: lake };
+    }
+
+    // Sea level is a parameter, not a constant: pick the height that leaves
+    // the fraction of land this attempt asked for. A fixed threshold against
+    // a renormalised fractal is how you get a world that is 82% land.
+    function seaLevelFor(elev, targetLand) {
+      var sample = [];
+      for (var i = 0; i < elev.length; i += 7) sample.push(elev[i]);
+      sample.sort(function (a, b) { return a - b; });
+      var k = Math.floor(sample.length * (1 - targetLand));
+      return sample[Math.min(sample.length - 1, Math.max(0, k))];
+    }
+
+    function generate(n, seed) {
+      var cells = n * n, i, x, y;
+
+      // --- the five fields DF carries -----------------------------------
+      var elev = field(n, seed, 0.54);
+      var drain = field(n, seed ^ 0x9e3779b9, 0.58);
+      var volc = field(n, seed ^ 0x25459827, 0.63);
+      var wet = field(n, seed ^ 0x85ebca6b, 0.60);
+
+      // A gentle pull toward the sea at the edges, so the world is a land
+      // mass with a coastline rather than noise that happens to cross a
+      // threshold at the border.
+      for (y = 0; y < n; y++) for (x = 0; x < n; x++) {
+        var dx = (x / (n - 1)) * 2 - 1, dy = (y / (n - 1)) * 2 - 1;
+        var r = Math.sqrt(dx * dx + dy * dy) / 1.32;
+        var fall = 1 - r * r;
+        elev[y * n + x] = elev[y * n + x] * 0.72 + Math.max(0, fall) * 0.42;
+      }
+      norm(elev);
+
+      var flood = fillDepressions(elev, n);
+      var filled = flood.filled;
+      rng = (seed ^ 0x27d4eb2f) >>> 0 || 1;
+      var SEA = seaLevelFor(elev, 0.34 + frand() * 0.22);
+
+      // --- temperature: latitude, then the lapse rate --------------------
+      var temp = new Float32Array(cells);
+      for (y = 0; y < n; y++) {
+        var lat = Math.abs((y / (n - 1)) * 2 - 1);          // 0 equator, 1 pole
+        var band = 1 - lat * lat * 1.18;
+        for (x = 0; x < n; x++) {
+          i = y * n + x;
+          var above = Math.max(0, elev[i] - SEA);
+          temp[i] = Math.max(0, Math.min(1, band - above * 0.85 + (wet[i] - 0.5) * 0.06));
+        }
+      }
+
+      // --- rainfall: a rain shadow, not noise ----------------------------
+      // Prevailing wind runs west to east carrying moisture. Sea recharges
+      // it; climbing ground wrings it out; the lee side goes dry. This is
+      // what puts a desert behind every range, which noise alone never does.
+      var rain = new Float32Array(cells);
+      for (y = 0; y < n; y++) {
+        var carry = 0.85;
+        for (x = 0; x < n; x++) {
+          i = y * n + x;
+          var e = elev[i];
+          if (e < SEA) { carry = Math.min(1, carry + 0.12); rain[i] = carry; continue; }
+          var rise = x > 0 ? Math.max(0, e - elev[i - 1]) : 0;
+          var drop = Math.min(carry, rise * 7.5 + 0.006);
+          carry -= drop;
+          carry = Math.min(1, carry + 0.004 + temp[i] * 0.004);
+          rain[i] = Math.max(0, Math.min(1, drop * 9 + carry * 0.55 + (wet[i] - 0.5) * 0.30));
+        }
+      }
+      var onLand = function (i) { return elev[i] >= SEA; };
+      histNorm(rain, onLand);
+      histNorm(drain, onLand);
+      histNorm(volc, onLand);
+
+      // --- rivers: walk downhill, dig when stuck -------------------------
+      // The wiki's description of DF's step, verbatim in behaviour: start
+      // high, always take the lowest neighbour, and when nothing is lower,
+      // lower the tile you are standing on until something is.
+      var flow = new Uint16Array(cells);
+      var lake = flood.lake;
+      for (i = 0; i < cells; i++) if (elev[i] < SEA) lake[i] = 0;   // that is sea
+      var sources = Math.round(n * 4);
+      rng = (seed ^ 0xc2b2ae35) >>> 0 || 1;
+      for (var s = 0; s < sources; s++) {
+        x = 1 + (xs32() % (n - 2));
+        y = 1 + (xs32() % (n - 2));
+        i = y * n + x;
+        if (elev[i] < SEA + (1 - SEA) * 0.34 || rain[i] < 0.30) continue;
+        var stuck = 0;
+        for (var k = 0; k < 3000; k++) {
+          i = y * n + x;
+          if (elev[i] < SEA) break;                       // reached the sea
+          if (flow[i] < 65000) flow[i]++;
+          var best = filled[i], bx = -1, by = -1;
+          for (var dy2 = -1; dy2 <= 1; dy2++)
+            for (var dx2 = -1; dx2 <= 1; dx2++) {
+              if (!dx2 && !dy2) continue;
+              var nx = x + dx2, ny = y + dy2;
+              if (nx < 1 || ny < 1 || nx >= n - 1 || ny >= n - 1) continue;
+              var v = filled[ny * n + nx];
+              if (v < best) { best = v; bx = nx; by = ny; }
+            }
+          if (bx < 0) {
+            filled[i] -= 0.0025;                          // dig, as DF does
+            elev[i] -= 0.0025;
+            if (++stuck > 60) { lake[i] = 1; break; }
+            continue;
+          }
+          stuck = 0;
+          elev[i] -= 0.0004;                              // the bed widens
+          x = bx; y = by;
+        }
+      }
+
+      // --- biome, read off the fields ------------------------------------
+      var B = { OCEAN:0, LAKE:1, RIVER:2, GLACIER:3, TUNDRA:4, MOUNTAIN:5,
+                PEAK:6, DESERT:7, BADLANDS:8, GRASSLAND:9, SAVANNA:10,
+                FOREST:11, SWAMP:12, MARSH:13 };
+      var biome = new Uint8Array(cells);
+      var RIVER_MIN = 6;
+      var MOUNT_AT = SEA + (1 - SEA) * 0.55, PEAK_AT = SEA + (1 - SEA) * 0.82;
+      for (i = 0; i < cells; i++) {
+        var e = elev[i], r100 = rain[i] * 100, d100 = drain[i] * 100, t100 = temp[i] * 100;
+        var b;
+        if (e < SEA) b = B.OCEAN;
+        else if (flow[i] >= RIVER_MIN) b = B.RIVER;
+        else if (lake[i]) b = B.LAKE;
+        else if (t100 < 9) b = B.GLACIER;
+        else if (e > PEAK_AT) b = B.PEAK;
+        else if (e > MOUNT_AT) b = B.MOUNTAIN;
+        else if (t100 < 24) b = B.TUNDRA;
+        else if (r100 < 20) b = B.DESERT;
+        else if (r100 < 33 && d100 >= 66) b = B.BADLANDS;
+        else if (r100 >= 66 && d100 < 50) b = B.SWAMP;
+        else if (r100 >= 50 && d100 < 33) b = B.MARSH;
+        else if (r100 >= 66) b = B.FOREST;
+        else if (d100 < 33 && t100 > 62) b = B.SAVANNA;
+        else b = B.GRASSLAND;
+        biome[i] = b;
+      }
+
+      // --- the rejection pass --------------------------------------------
+      // Shape the generator loosely, then throw the world away if it is not
+      // the kind of world we asked for. Cheap, because a world is 85ms.
+      var counts = new Int32Array(16), land = 0;
+      for (i = 0; i < cells; i++) { counts[biome[i]]++; if (elev[i] >= SEA) land++; }
+      var mouths = 0;
+      for (y = 1; y < n - 1; y++) for (x = 1; x < n - 1; x++) {
+        i = y * n + x;
+        if (biome[i] !== B.RIVER) continue;
+        if (biome[i - 1] === B.OCEAN || biome[i + 1] === B.OCEAN ||
+            biome[i - n] === B.OCEAN || biome[i + n] === B.OCEAN) mouths++;
+      }
+      var kinds = 0, floor = cells * 0.004;
+      for (var b2 = 1; b2 < 14; b2++) if (counts[b2] >= floor) kinds++;
+      var landFrac = land / cells;
+      var relief = (counts[B.MOUNTAIN] + counts[B.PEAK]) / cells;
+      // Coastline against land area: a single smooth blob scores low, an
+      // interesting coast scores high. Land fraction is fitted rather than
+      // tested, so this is the test that keeps the shape honest.
+      var coast = 0;
+      for (y = 1; y < n - 1; y++) for (x = 1; x < n - 1; x++) {
+        i = y * n + x;
+        if (elev[i] < SEA) continue;
+        if (elev[i - 1] < SEA || elev[i + 1] < SEA ||
+            elev[i - n] < SEA || elev[i + n] < SEA) coast++;
+      }
+      var coastRatio = coast / Math.max(1, land);
+
+      var fails = [];
+      if (mouths < 4) fails.push("river mouths " + mouths);
+      if (kinds < 5) fails.push("biomes " + kinds);
+      if (relief < 0.015) fails.push("relief " + (relief * 100).toFixed(1) + "%");
+      if (coastRatio < 0.012) fails.push("coast " + (coastRatio * 100).toFixed(1) + "%");
+
+      return { elev:elev, rain:rain, temp:temp, drain:drain, volc:volc,
+               flow:flow, lake:lake, biome:biome,
+               landFrac:landFrac, mouths:mouths, kinds:kinds, relief:relief,
+               coastRatio:coastRatio, fails:fails, sea:SEA };
+    }
+
+    self.onmessage = function (e) {
+      var n = e.data.n, seed = e.data.seed >>> 0, maxTries = e.data.maxTries || 24;
+      var t0 = Date.now(), w = null, tries = 0;
+      for (var k = 0; k < maxTries; k++) {
+        tries++;
+        self.postMessage({ type:"try", attempt:tries });
+        w = generate(n, (seed + k * 0x9e3779b9) >>> 0);
+        if (!w.fails.length) break;
+      }
+      self.postMessage({
+        type:"world", n:n, seed:seed, tries:tries, ms:Date.now() - t0,
+        accepted:!w.fails.length, fails:w.fails, sea:w.sea,
+        landFrac:w.landFrac, mouths:w.mouths, kinds:w.kinds, relief:w.relief,
+        coastRatio:w.coastRatio,
+        elev:w.elev.buffer, rain:w.rain.buffer, temp:w.temp.buffer,
+        drain:w.drain.buffer, volc:w.volc.buffer,
+        flow:w.flow.buffer, lake:w.lake.buffer, biome:w.biome.buffer
+      }, [w.elev.buffer, w.rain.buffer, w.temp.buffer, w.drain.buffer,
+          w.volc.buffer, w.flow.buffer, w.lake.buffer, w.biome.buffer]);
+    };
+  }
+
+  // ===========================================================================
+  // The world, once the worker hands it back
+  // ===========================================================================
+  var BIOME = [
+    { n:"Ocean",     c:2  }, { n:"Lake",      c:4  }, { n:"River",     c:5  },
+    { n:"Glacier",   c:14 }, { n:"Tundra",    c:13 }, { n:"Mountains", c:15 },
+    { n:"Peaks",     c:16 }, { n:"Desert",    c:6  }, { n:"Badlands",  c:7  },
+    { n:"Grassland", c:8  }, { n:"Savanna",   c:9  }, { n:"Forest",    c:10 },
+    { n:"Swamp",     c:11 }, { n:"Marsh",     c:12 }
+  ];
+  var B_OCEAN = 0, B_LAKE = 1, B_RIVER = 2, B_MOUNTAIN = 5, B_PEAK = 6;
+  // A river is one tile wide and would vanish from an overview that sampled
+  // each block, so it wins its block outright. Nothing else does: give the
+  // same override to an areal biome and it swallows the map, because at ten
+  // tiles to a cell almost every block contains at least one tile of
+  // anything covering a sixth of the land. Everything else goes by majority.
+  var OVERRIDE = B_RIVER;
+
+  var W = null;            // the world: n, sea, fields, biome
+  var gen = { busy:false, attempt:0, tries:0, ms:0, accepted:true, fails:[], seed:0 };
+  var map = null;          // the sampled-down overview: rw, rh, stride, b, e
+  var cur = { x:0, y:0 };  // cursor, in overview coordinates
+  var mode = "world";
+  var worker = null;
+
+  function say(s) { document.getElementById("say").textContent = s; }
+
+  function startWorker() {
+    var src = "(" + workerMain.toString() + ")()";
+    var url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    worker = new Worker(url);
+    worker.onmessage = function (e) {
+      var d = e.data;
+      if (d.type === "try") { gen.attempt = d.attempt; return; }
+      W = {
+        n: d.n, sea: d.sea,
+        elev: new Float32Array(d.elev), rain: new Float32Array(d.rain),
+        temp: new Float32Array(d.temp), drain: new Float32Array(d.drain),
+        volc: new Float32Array(d.volc), flow: new Uint16Array(d.flow),
+        lake: new Uint8Array(d.lake), biome: new Uint8Array(d.biome)
+      };
+      gen.busy = false; gen.tries = d.tries; gen.ms = d.ms;
+      gen.accepted = d.accepted; gen.fails = d.fails; gen.seed = d.seed;
+      gen.landFrac = d.landFrac; gen.mouths = d.mouths; gen.kinds = d.kinds;
+      buildOverview();
+      cur.x = map.rw >> 1; cur.y = map.rh >> 1;
+      say("World " + d.seed.toString(16) + " ready after " + d.tries +
+          (d.tries === 1 ? " attempt" : " attempts") +
+          (d.accepted ? "." : " (accepted under protest: " + d.fails.join(", ") + ")."));
+    };
+  }
+  function generateWorld(seed) {
+    gen.busy = true; gen.attempt = 0;
+    say("Generating a world…");
+    worker.postMessage({ n: 513, seed: seed >>> 0, maxTries: 24 });
+  }
+
+  function buildOverview() {
+    if (!W) return;
+    var n = W.n;
+    var stride = Math.max(1, Math.ceil(Math.max(n / (V.w - 2), n / ((V.h - 1) * 2))));
+    var rw = Math.floor(n / stride), rh = Math.floor(n / stride);
+    var b = new Uint8Array(rw * rh), e = new Float32Array(rw * rh);
+    var tally = new Int32Array(BIOME.length);
+    for (var ry = 0; ry < rh; ry++) for (var rx = 0; rx < rw; rx++) {
+      var x0 = rx * stride, y0 = ry * stride, sum = 0, cnt = 0;
+      tally.fill(0);
+      for (var yy = y0; yy < y0 + stride && yy < n; yy++)
+        for (var xx = x0; xx < x0 + stride && xx < n; xx++) {
+          tally[W.biome[yy * n + xx]]++;
+          sum += W.elev[yy * n + xx]; cnt++;
+        }
+      var pick = 0, most = -1;
+      for (var t = 0; t < tally.length; t++) if (tally[t] > most) { most = tally[t]; pick = t; }
+      if (tally[OVERRIDE]) pick = OVERRIDE;
+      b[ry * rw + rx] = pick;
+      e[ry * rw + rx] = sum / (cnt || 1);
+    }
+    map = { rw:rw, rh:rh, stride:stride, b:b, e:e };
+    cur.x = clamp(cur.x, 0, rw - 1);
+    cur.y = clamp(cur.y, 0, rh - 1);
+  }
+
+  // Ocean reads its depth, so a shelf and an abyss are not the same blue.
+  function tintOf(bi, elev) {
+    if (bi !== B_OCEAN) return BIOME[bi].c;
+    var d = (W.sea - elev) / (W.sea || 1);
+    return d > 0.55 ? 1 : d > 0.22 ? 2 : 3;
+  }
+
+  function worldOrigin() {
+    var mw = map.rw, mh = Math.ceil(map.rh / 2);
+    return { ox: V.x + Math.max(0, ((V.w - mw) >> 1)),
+             oy: V.y + Math.max(0, ((V.h - mh) >> 1)), mw:mw, mh:mh };
+  }
+
+  function drawWorld() {
+    if (!map) return;
+    var o = worldOrigin(), rw = map.rw, rh = map.rh;
+    for (var cy = 0; cy < o.mh; cy++) {
+      var yTop = cy * 2, yBot = yTop + 1;
+      for (var cx = 0; cx < rw; cx++) {
+        var iT = yTop * rw + cx;
+        var top = tintOf(map.b[iT], map.e[iT]);
+        var bot = top;
+        if (yBot < rh) { var iB = yBot * rw + cx; bot = tintOf(map.b[iB], map.e[iB]); }
+        putHalf(o.ox + cx, o.oy + cy, top, bot, Z.GROUND);
+      }
+    }
+    // The cursor takes over its own half of a cell and leaves the other half
+    // showing, so you can still see the tile north or south of it.
+    var ccx = o.ox + cur.x, ccy = o.oy + (cur.y >> 1);
+    var rT = cur.y & ~1, rB = Math.min(rh - 1, rT + 1);
+    var cT = tintOf(map.b[rT * rw + cur.x], map.e[rT * rw + cur.x]);
+    var cB = tintOf(map.b[rB * rw + cur.x], map.e[rB * rw + cur.x]);
+    if (cur.y & 1) cB = C.ink; else cT = C.ink;
+    putHalf(ccx, ccy, cT, cB, Z.MARK);
+    // brackets either side, so the cursor is findable without colour
+    putStr(ccx - 1, ccy, "[", C.ink, Z.MARK);
+    putStr(ccx + 1, ccy, "]", C.ink, Z.MARK);
+
+    drawLegend(o);
+  }
+
+  function drawLegend(o) {
+    var lx = o.ox + o.mw + 2, lw = 20;
+    if (lx + lw > V.x + V.w) return;              // no room; the map wins
+    var ly = o.oy, lh = Math.min(V.y + V.h - ly, BIOME.length + 4);
+    panel(lx, ly, lw, lh, C.frame);
+    putStr(lx + 2, ly, " Legend ", C.label, Z.UI, C.panel);
+    for (var i = 0; i < BIOME.length && ly + 2 + i < ly + lh - 1; i++) {
+      put(lx + 2, ly + 2 + i, G_FULL, BIOME[i].c, Z.UI, BIOME[i].c);
+      put(lx + 3, ly + 2 + i, G_FULL, BIOME[i].c, Z.UI, BIOME[i].c);
+      putStr(lx + 5, ly + 2 + i, BIOME[i].n, C.dim, Z.UI, C.panel);
+    }
+  }
+
+  // The tile the cursor is over, in full world coordinates.
+  //
+  // A cell on the overview stands for a whole block, and the block shows its
+  // rarest biome rather than its middle one -- otherwise every river would
+  // vanish at map scale. So the middle of the block is the wrong tile to hand
+  // back: it is usually not the thing being pointed at. Return the nearest
+  // tile that actually is what the cursor appears to be sitting on.
+  function cursorWorldIndex() {
+    var s = map.stride, n = W.n;
+    var want = map.b[cur.y * map.rw + cur.x];
+    var x0 = cur.x * s, y0 = cur.y * s;
+    var cxw = Math.min(n - 1, x0 + (s >> 1)), cyw = Math.min(n - 1, y0 + (s >> 1));
+    var centre = cyw * n + cxw;
+    if (W.biome[centre] === want) return centre;
+    var best = centre, bestD = Infinity;
+    for (var yy = y0; yy < y0 + s && yy < n; yy++)
+      for (var xx = x0; xx < x0 + s && xx < n; xx++) {
+        var i = yy * n + xx;
+        if (W.biome[i] !== want) continue;
+        var dx = xx - cxw, dy = yy - cyw, dd = dx * dx + dy * dy;
+        if (dd < bestD) { bestD = dd; best = i; }
+      }
+    return best;
+  }
+
+  // ===========================================================================
+  // The local map
+  //
+  // One world tile, opened up into z-levels. Rock, soil, an aquifer band, the
+  // river if the tile has one, and the sea if the tile is under it.
+  // ===========================================================================
+  var MAT = { OPEN:0, SOIL:1, ROCK:2, AQUIFER:3 };
+  var MATC = [null, [24,25,26], [27,28,29], [30,31,32]];
+  var WATER_G = [" ", ".", ".", "~", "~", "≈", "≈", "≈"];
+  var WATER_C = [0, 33, 33, 34, 34, 35, 35, 36];
+  var LD = 14, SEA_Z = 5;
+
+  var L = null;
+  var lcur = { x:0, y:0 };
+
+  function lds(n, seed, rough) {           // the same midpoint displacement
+    var h = new Float32Array(n * n), r = seed >>> 0 || 1;
+    function nx() { r ^= r << 13; r ^= r >>> 17; r ^= r << 5; return (r >>>= 0); }
+    function fr() { return (nx() >>> 8) * (1 / 16777216); }
+    var size = n - 1, x, y;
+    h[0] = fr(); h[size] = fr(); h[size * n] = fr(); h[size * n + size] = fr();
+    var scale = 1;
+    for (var step = size; step > 1; step >>= 1) {
+      var half = step >> 1;
+      for (y = 0; y < size; y += step) for (x = 0; x < size; x += step) {
+        var a = h[y*n+x], b = h[y*n+x+step], c = h[(y+step)*n+x], d2 = h[(y+step)*n+x+step];
+        h[(y+half)*n+(x+half)] = (a+b+c+d2) * 0.25 + (fr() - 0.5) * scale;
+      }
+      for (y = 0; y <= size; y += half) {
+        var x0 = ((y / half) & 1) ? 0 : half;
+        for (x = x0; x <= size; x += step) {
+          var s2 = 0, c2 = 0;
+          if (x >= half)        { s2 += h[y*n+x-half];   c2++; }
+          if (x + half <= size) { s2 += h[y*n+x+half];   c2++; }
+          if (y >= half)        { s2 += h[(y-half)*n+x]; c2++; }
+          if (y + half <= size) { s2 += h[(y+half)*n+x]; c2++; }
+          h[y*n+x] = s2 / c2 + (fr() - 0.5) * scale;
+        }
+      }
+      scale *= rough;
+    }
+    var lo = Infinity, hi = -Infinity, i;
+    for (i = 0; i < h.length; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
+    var dd = hi - lo || 1;
+    for (i = 0; i < h.length; i++) h[i] = (h[i] - lo) / dd;
+    return h;
+  }
+
+  function buildLocal(wi) {
+    var n = W.n, wx = wi % n, wy = (wi / n) | 0;
+    var w = clamp(V.w - 2, 40, 160), h = clamp(V.h, 12, 60);
+    var plane = w * h, cells = plane * LD;
+
+    var mat = new Uint8Array(cells), lvl = new Uint8Array(cells);
+    var magma = new Uint8Array(plane);
+    var surface = new Int16Array(plane);
+
+    // Fine detail, then the world's own slope through the tile, so the local
+    // map joins up with its neighbours instead of floating free.
+    var D = 129, det = lds(D, (gen.seed ^ (wi * 2654435761)) >>> 0, 0.52);
+    function worldElev(fx, fy) {                 // fx,fy in -0.5..0.5 of a tile
+      var ex = clamp(wx + fx, 0, n - 1), ey = clamp(wy + fy, 0, n - 1);
+      var x0 = Math.floor(ex), y0 = Math.floor(ey);
+      var tx = ex - x0, ty = ey - y0;
+      var x1 = Math.min(n - 1, x0 + 1), y1 = Math.min(n - 1, y0 + 1);
+      var a = W.elev[y0*n+x0], b = W.elev[y0*n+x1];
+      var c = W.elev[y1*n+x0], d2 = W.elev[y1*n+x1];
+      return (a*(1-tx)+b*tx)*(1-ty) + (c*(1-tx)+d2*tx)*ty;
+    }
+
+    var avg = 0;
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var base = worldElev((x / w) - 0.5, (y / h) - 0.5);
+      var fine = det[Math.min(D-1, (y * D / h) | 0) * D + Math.min(D-1, (x * D / w) | 0)];
+      var hh = base + (fine - 0.5) * 0.045;
+      var z = Math.round(SEA_Z + (hh - W.sea) * 20);
+      z = clamp(z, 1, LD - 3);
+      surface[y * w + x] = z;
+      avg += z;
+    }
+    avg = Math.round(avg / plane);
+
+    // Aquifer: a soaked band of rock, present where the ground does not
+    // drain or the rain will not stop. Dig into it and it leaks, which is the
+    // single most memorable thing that happens to a new DF fort.
+    var drain = W.drain[wi], rain = W.rain[wi], volc = W.volc[wi];
+    var hasAq = drain < 0.46 || rain > 0.56;
+    var aqTop = clamp(avg - 2, 1, LD - 4), aqBot = Math.max(1, aqTop - 1);
+
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      var p = y * w + x, sz = surface[p];
+      for (var z2 = 0; z2 <= sz; z2++) {
+        var i = z2 * plane + p;
+        mat[i] = (z2 >= sz - 1) ? MAT.SOIL : MAT.ROCK;
+        if (hasAq && z2 <= aqTop && z2 >= aqBot && mat[i] === MAT.ROCK) mat[i] = MAT.AQUIFER;
+      }
+      if (volc > 0.62) { mat[p] = MAT.OPEN; magma[p] = 1; }   // a hot floor
+      // the sea, and anything else standing below sea level
+      for (var z3 = sz + 1; z3 <= SEA_Z; z3++) lvl[z3 * plane + p] = 7;
+    }
+
+    // The river, if the world says this tile has one. Its head is refilled
+    // every tick -- a permanent source, measured at 0.03ms/tick on an active
+    // set against 2.13ms full-scanned.
+    var springs = [], sinks = [];
+    if (W.flow[wi] >= 6 && W.biome[wi] !== B_OCEAN) {
+      // The bed falls west to east and the floor gives out at the last few
+      // columns, so the river ends in a fall off the edge of the map.
+      //
+      // It will not run for ever, and finding that out was worth the build.
+      // Gravity and diffusion are two of DF's three rules; the third is
+      // pressure, left out here because it is the expensive one. Without it
+      // water cannot be carried any distance sideways: diffusion only moves
+      // when two neighbours differ by two or more, so a level of 1 is stuck
+      // for good and a long channel drains toward its mouth until it is a
+      // chain of still pools. Fill this channel and it flows hard for a few
+      // seconds, drains, and stops -- at which point the active set is empty
+      // and the water costs nothing at all, which is the architecture doing
+      // exactly what it claims.
+      //
+      // It also explains the thing DF is famous for. The rule that makes a
+      // river actually run is the one that has to search a connected body of
+      // water every tick, and water is the single largest FPS drain in DF.
+      // The two cheap rules give you ponds. The expensive one gives you
+      // rivers. See TERRAIN.md.
+      var chanY = function (cx) {
+        return clamp(Math.round(h / 2 + Math.sin(cx * 0.09) * h * 0.20
+                                      + Math.sin(cx * 0.031 + 1.7) * h * 0.11), 1, h - 2);
+      };
+      var DROP = 5, MOUTH = 4;
+      var bedTop = clamp(surface[chanY(0) * w] - 1, 2 + DROP, LD - 4);
+      for (x = 0; x < w; x++) {
+        var bed = clamp(bedTop - Math.floor(x * DROP / (w - 1)), 1, LD - 3);
+        var fall = x >= w - MOUTH;
+        var cy2 = chanY(x);
+        for (var dy = -1; dy <= 1; dy++) {
+          var yy = clamp(cy2 + dy, 1, h - 2), pp = yy * w + x;
+          var top = Math.max(surface[pp], bed + 2);
+          var floor = fall ? 0 : bed;
+          for (var zc = floor; zc <= top && zc < LD; zc++) mat[zc * plane + pp] = MAT.OPEN;
+          for (var zb = 0; zb < floor; zb++)               // a bed to run on
+            if (!mat[zb * plane + pp]) mat[zb * plane + pp] = MAT.ROCK;
+          for (var zw = 0; zw < LD; zw++) lvl[zw * plane + pp] = 0;
+          surface[pp] = floor - 1;
+          if (fall) {
+            for (var zs = 0; zs < LD; zs++) sinks.push(zs * plane + pp);
+          } else {
+            lvl[bed * plane + pp] = 7;
+            if (x < 2) springs.push(bed * plane + pp);
+          }
+        }
+      }
+    }
+
+    var cur2 = new Int32Array(cells), nxt = new Int32Array(cells);
+    var mark = new Uint8Array(cells), nmark = new Uint8Array(cells);
+    var curN = 0;
+    for (var i2 = 0; i2 < cells; i2++) if (lvl[i2]) { mark[i2] = 1; cur2[curN++] = i2; }
+
+    L = { w:w, h:h, d:LD, plane:plane, cells:cells, wi:wi,
+          mat:mat, lvl:lvl, magma:magma, surface:surface,
+          cur:cur2, nxt:nxt, mark:mark, nmark:nmark, curN:curN,
+          springs:springs, sinks:sinks, leaking:[], leakSet:new Uint8Array(cells),
+          hasAq:hasAq, aqTop:aqTop, vz:clamp(avg + 1, 1, LD - 2),
+          ticks:0, moved:0, drained:false, leak:0, dug:0 };
+    lcur.x = w >> 1; lcur.y = h >> 1;
+  }
+
+  // --- the fluid, on an active set -----------------------------------------
+  // Gravity then diffusion, DF's 0-7 fill. The rule that makes it cheap is
+  // that a cell which moved nothing pushes nothing, so still water falls out
+  // of the set and a settled lake costs nothing at all.
+  function fluidTick() {
+    var w = L.w, h = L.h, plane = L.plane, total = L.cells;
+    var lvl = L.lvl, mat = L.mat;
+    var cur2 = L.cur, curN = L.curN, mark = L.mark, nxt = L.nxt, nmark = L.nmark;
+    var n = 0, moved = 0;
+
+    function push(i) { if (i >= 0 && i < total && !nmark[i]) { nmark[i] = 1; nxt[n++] = i; } }
+    // Both ends, not just the destination: the source just lost fluid, so a
+    // neighbour level with it may now want to spill in. Waking only the
+    // destination leaves water that has quietly stopped moving when it should
+    // not have -- which is what the drain check below exists to catch.
+    function touch(i, j) {
+      push(i); push(j); push(i + plane); push(j + plane);
+      push(i - 1); push(i + 1); push(i - w); push(i + w);
+      push(j - 1); push(j + 1); push(j - w); push(j + w);
+    }
+
+    for (var a = 0; a < curN; a++) {
+      var i = cur2[a];
+      var z = (i / plane) | 0, off = i - z * plane;
+      var y = (off / w) | 0, x = off - y * w;
+      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
+      var v = lvl[i];
+      if (!v || mat[i]) continue;
+
+      if (z > 0) {                                  // gravity
+        var b = i - plane;
+        if (!mat[b] && lvl[b] < 7) {
+          var room = 7 - lvl[b], mv = v < room ? v : room;
+          lvl[b] += mv; v -= mv; lvl[i] = v; moved += mv;
+          touch(i, b);
+          if (!v) continue;
+        }
+      }
+      // Diffusion averages the pair, which is the rule the wiki gives. The
+      // single-unit version looks identical at rest and is wrong in motion:
+      // it can only carry water about seven tiles from a source, so a river
+      // fed at one end of a long channel never reaches the other.
+      var ns = [i - 1, i + 1, i - w, i + w];
+      for (var k = 0; k < 4; k++) {
+        var j = ns[k];
+        if (mat[j]) continue;
+        var diff = v - lvl[j];
+        if (diff >= 2) {
+          var mv = diff >> 1;
+          lvl[j] += mv; v -= mv; lvl[i] = v; moved += mv;
+          touch(i, j);
+        }
+      }
+    }
+    for (var a2 = 0; a2 < curN; a2++) mark[cur2[a2]] = 0;
+
+    L.cur = nxt; L.nxt = cur2;
+    L.mark = nmark; L.nmark = mark;
+    L.curN = n; L.moved = moved;
+    return moved;
+  }
+
+  // The reference implementation: every cell, every level, no queue. Only
+  // ever run to check the active set, never in the frame loop.
+  function fullScanTick() {
+    var w = L.w, h = L.h, d = L.d, plane = L.plane, lvl = L.lvl, mat = L.mat;
+    var moved = 0;
+    for (var z = 0; z < d; z++) for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+      var i = z * plane + y * w + x, v = lvl[i];
+      if (!v || mat[i]) continue;
+      if (z > 0) {
+        var b = i - plane;
+        if (!mat[b] && lvl[b] < 7) {
+          var room = 7 - lvl[b], mv = v < room ? v : room;
+          lvl[b] += mv; v -= mv; lvl[i] = v; moved += mv;
+          if (!v) continue;
+        }
+      }
+      var ns = [i - 1, i + 1, i - w, i + w];
+      for (var k = 0; k < 4; k++) {
+        var j = ns[k];
+        if (mat[j]) continue;
+        var diff = v - lvl[j];
+        if (diff >= 2) { var mv = diff >> 1; lvl[j] += mv; v -= mv; lvl[i] = v; moved += mv; }
+      }
+    }
+    return moved;
+  }
+  function reseedActive() {
+    var n = 0;
+    L.mark.fill(0);
+    L.nmark.fill(0);   // a stale flag here silently swallows the next wake-up
+    for (var i = 0; i < L.cells; i++) if (L.lvl[i]) { L.mark[i] = 1; L.cur[n++] = i; }
+    L.curN = n;
+  }
+
+  function wake(i) { if (i >= 0 && i < L.cells && !L.mark[i]) { L.mark[i] = 1; L.cur[L.curN++] = i; } }
+  function wakeAround(i) {
+    wake(i); wake(i - 1); wake(i + 1); wake(i - L.w); wake(i + L.w);
+    wake(i - L.plane); wake(i + L.plane);
+  }
+
+  function digAt(x, y, z) {
+    if (x < 1 || y < 1 || x >= L.w - 1 || y >= L.h - 1 || z < 0 || z >= L.d) return false;
+    var i = z * L.plane + y * L.w + x;
+    if (!L.mat[i]) return false;
+    L.mat[i] = MAT.OPEN;
+    L.dug++;
+    var ns = [i - 1, i + 1, i - L.w, i + L.w, i - L.plane, i + L.plane];
+    for (var k = 0; k < 6; k++) {
+      var j = ns[k];
+      if (j < 0 || j >= L.cells) continue;
+      if (L.mat[j] === MAT.AQUIFER && !L.leakSet[j]) { L.leakSet[j] = 1; L.leaking.push(j); }
+      wake(j);
+    }
+    wake(i);
+    return true;
+  }
+  function pourAt(x, y, z) {
+    var i = z * L.plane + y * L.w + x;
+    if (L.mat[i]) return false;
+    L.lvl[i] = 7; wake(i);
+    return true;
+  }
+  // Aquifer rock seeps into whatever open space it touches. Slow, endless,
+  // and the reason a fort drowns.
+  function seepTick() {
+    for (var a = 0; a < L.leaking.length; a++) {
+      var i = L.leaking[a];
+      var ns = [i - 1, i + 1, i - L.w, i + L.w, i + L.plane];
+      for (var k = 0; k < 5; k++) {
+        var j = ns[k];
+        if (j < 0 || j >= L.cells) continue;
+        if (!L.mat[j] && L.lvl[j] < 7) { L.lvl[j]++; wake(j); break; }
+      }
+    }
+  }
+
+  // ===========================================================================
+  // Drawing the local map
+  //
+  // Straight down from the level you are on: a solid tile at your own level is
+  // a wall, anything below it is a top seen from above and dims with distance.
+  // That is DF's presentation, and it is the whole reason a z-level map reads
+  // at all.
+  // ===========================================================================
+  var showLevels = false, paused = false;
+
+  function drawLocal() {
+    var ox = V.x + ((V.w - L.w) >> 1), oy = V.y + ((V.h - L.h) >> 1);
+    var vz = L.vz, plane = L.plane;
+    for (var y = 0; y < L.h; y++) for (var x = 0; x < L.w; x++) {
+      var p = y * L.w + x, drew = false;
+      for (var z = vz; z >= 0; z--) {
+        var i = z * plane + p, dep = vz - z, lv = L.lvl[i];
+        if (lv) {
+          var g = (showLevels && dep <= 1) ? GI[String(lv)] : GI[WATER_G[lv]];
+          put(ox + x, oy + y, g, dep >= 3 ? 33 : WATER_C[lv], Z.WATER);
+          drew = true; break;
+        }
+        if (L.mat[i]) {
+          var cc = MATC[L.mat[i]];
+          // A wall is at your own level; anything below it is a top seen from
+          // above, and the first level down is the ordinary case rather than
+          // something distant, so the dimming starts from the second.
+          var shade = dep === 0 ? 0 : clamp(dep - 1, 0, 2);
+          put(ox + x, oy + y, dep === 0 ? GI["#"] : GI["."], cc[shade], Z.GROUND);
+          drew = true; break;
+        }
+        if (z === 0 && L.magma[p]) {
+          put(ox + x, oy + y, GI["~"], 38, Z.GROUND);
+          drew = true; break;
+        }
+      }
+      if (!drew) put(ox + x, oy + y, 0, 0, Z.GROUND, C.sky);
+    }
+    // The cursor keeps the glyph under it and takes a background, so you can
+    // still read the tile you are about to dig.
+    var cx = ox + lcur.x, cy = oy + lcur.y;
+    put(cx, cy, buf[cy * cols + cx] >> 16, C.ink, Z.MARK, C.frame);
+    put(cx, V.y - 1, GI["·"], C.label, Z.UI);       // crosshair ticks on
+    put(V.x - 1, cy, GI["·"], C.label, Z.UI);       // the rules either side
+  }
+
+  // ===========================================================================
+  // Chrome, drawn as characters
+  // ===========================================================================
+  function drawShell() {
+    hfill(1, 0, cols - 2, "═", C.frame, Z.UI);
+    hfill(1, rows - 1, cols - 2, "═", C.frame, Z.UI);
+    for (var j = 1; j < rows - 1; j++) {
+      put(0, j, GI["║"], C.frame, Z.UI);
+      put(cols - 1, j, GI["║"], C.frame, Z.UI);
+    }
+    put(0, 0, GI["╔"], C.frame, Z.UI);
+    put(cols - 1, 0, GI["╗"], C.frame, Z.UI);
+    put(0, rows - 1, GI["╚"], C.frame, Z.UI);
+    put(cols - 1, rows - 1, GI["╝"], C.frame, Z.UI);
+
+    hfill(1, 2, cols - 2, "─", C.rule, Z.UI);
+    hfill(1, rows - 4, cols - 2, "─", C.rule, Z.UI);
+
+    putStr(2, 1, "WATERTABLE", C.ink, Z.UI);
+    putStr(13, 1, mode === "world" ? "world map" : "underground", C.label, Z.UI);
+
+    var right = W ? ("seed " + (gen.seed >>> 0).toString(16)
+                   + "   " + gen.tries + (gen.tries === 1 ? " try" : " tries")
+                   + "   " + gen.ms + "ms") : "";
+    putStr(cols - 2 - right.length, 1, right, C.dim, Z.UI);
+
+    putStr(2, rows - 3, statusLine(), C.dim, Z.UI);
+    putStr(2, rows - 2, keysLine(), C.label, Z.UI);
+
+    var perf = "paint " + stat.paintMs.toFixed(1) + "ms  " + stat.dirty + " cells";
+    putStr(cols - 2 - perf.length, rows - 2, perf, C.rule, Z.UI);
+  }
+
+  function statusLine() {
+    if (!W) return "Generating…";
+    if (mode === "world") {
+      var i = cursorWorldIndex();
+      var b = W.biome[i];
+      return pad(BIOME[b].n, 11)
+        + " elev " + rpad(Math.round(W.elev[i] * 100), 3)
+        + "  rain " + rpad(Math.round(W.rain[i] * 100), 3)
+        + "  drain " + rpad(Math.round(W.drain[i] * 100), 3)
+        + "  temp " + rpad(Math.round(W.temp[i] * 100), 3)
+        + "  volc " + rpad(Math.round(W.volc[i] * 100), 3)
+        + "  river " + rpad(W.flow[i], 3)
+        + "   |  land " + Math.round(gen.landFrac * 100) + "%  mouths "
+        + gen.mouths + "  biomes " + gen.kinds
+        + (gen.accepted ? "" : "  REJECTED: " + gen.fails.join(", "));
+    }
+    return "level " + rpad(L.vz, 2) + "/" + (L.d - 1)
+      + "   dug " + rpad(L.dug, 4)
+      + "   water active " + rpad(L.curN, 6)
+      + "   tick " + stat.tickMs.toFixed(2) + "ms"
+      + (L.hasAq ? ("   aquifer at " + L.aqTop + (L.leaking.length ? " LEAKING" : "")) : "   no aquifer")
+      + (L.springs.length ? (L.curN ? "   river draining" : "   river settled") : "")
+      + (paused ? "   PAUSED" : "")
+      + (L.leak ? "   DRAIN CHECK FAILED: " + L.leak + " units" : "");
+  }
+  function keysLine() {
+    return mode === "world"
+      ? "[G] another world   [arrows/WASD] cursor   [Enter] embark here"
+      : "[,/.] level   [D] dig   [W] water   [F] fill levels   [P] pause   [V] verify   [Esc] world map";
+  }
+
+  function drawBusy() {
+    var msg = "generating — attempt " + gen.attempt;
+    var w = msg.length + 6, x = (cols - w) >> 1, y = (rows >> 1) - 2;
+    panel(x, y, w, 5, C.frame);
+    putStr(x + 3, y + 2, msg, C.ink, Z.UI, C.panel);
+  }
+
+  // ===========================================================================
+  // Input
+  // ===========================================================================
+  function moveCursor(dx, dy) {
+    if (mode === "world") {
+      if (!map) return;
+      cur.x = clamp(cur.x + dx, 0, map.rw - 1);
+      cur.y = clamp(cur.y + dy, 0, map.rh - 1);
+    } else {
+      lcur.x = clamp(lcur.x + dx, 1, L.w - 2);
+      lcur.y = clamp(lcur.y + dy, 1, L.h - 2);
+    }
+  }
+  function embark() {
+    var wi = cursorWorldIndex();
+    buildLocal(wi);
+    mode = "local";
+    forceFull = true;
+    say("Embarked on " + BIOME[W.biome[wi]].n.toLowerCase()
+        + (L.hasAq ? ", aquifer at level " + L.aqTop : ", no aquifer")
+        + (L.springs.length ? ", a river runs through it" : "") + ".");
+  }
+  function verify() {
+    var moved = fullScanTick();
+    reseedActive();
+    L.leak = moved;
+    say(moved === 0
+      ? "Drain check: the reference scan moves nothing, so the active set is complete."
+      : "Drain check: the reference scan still moved " + moved + " units — the active set missed them.");
+  }
+
+  // Arrows steer in both views. WASD steers only on the world map, because
+  // underground those letters are verbs -- D digs and W pours -- and a key
+  // that means two things is a key you get wrong in a hurry.
+  var STEER = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1] };
+  var STEER_W = { a:[-1,0], d:[1,0], w:[0,-1], s:[0,1] };
+  window.addEventListener("keydown", function (e) {
+    var k = e.key, lk = k.length === 1 ? k.toLowerCase() : k;
+    var mv = STEER[k] || (mode === "world" ? STEER_W[lk] : null);
+    if (mv) { moveCursor(mv[0], mv[1]); e.preventDefault(); return; }
+
+    if (lk === "g") { if (!gen.busy) generateWorld((Math.random() * 0xffffffff) >>> 0); }
+    else if (k === "Enter") { if (mode === "world" && W && !gen.busy) embark(); }
+    else if (k === "Escape") {
+      if (mode === "local") { mode = "world"; forceFull = true; say("Back to the world map."); }
+    }
+    else if (mode !== "local" || !L) { return; }
+    else if (lk === "d") { digAt(lcur.x, lcur.y, L.vz); }
+    else if (lk === "w") { pourAt(lcur.x, lcur.y, L.vz); }
+    else if (k === "," || k === "<") { L.vz = clamp(L.vz - 1, 0, L.d - 1); }
+    else if (k === "." || k === ">") { L.vz = clamp(L.vz + 1, 0, L.d - 1); }
+    else if (lk === "f") { showLevels = !showLevels; }
+    else if (lk === "p") { paused = !paused; }
+    else if (lk === "v") { verify(); }
+  });
+
+  var dragging = false;
+  function cellFromEvent(e) {
+    var r = cv.getBoundingClientRect();
+    return { x: Math.floor((e.clientX - r.left) / CELL_W),
+             y: Math.floor((e.clientY - r.top) / CELL_H) };
+  }
+  cv.addEventListener("mousedown", function (e) {
+    dragging = true; pointAt(e, true); e.preventDefault();
+  });
+  window.addEventListener("mouseup", function () { dragging = false; });
+  cv.addEventListener("mousemove", function (e) { if (dragging) pointAt(e, true); });
+  function pointAt(e, act) {
+    var c = cellFromEvent(e);
+    if (mode === "world") {
+      if (!map) return;
+      var o = worldOrigin();
+      cur.x = clamp(c.x - o.ox, 0, map.rw - 1);
+      cur.y = clamp((c.y - o.oy) * 2, 0, map.rh - 1);
+    } else if (L) {
+      var ox = V.x + ((V.w - L.w) >> 1), oy = V.y + ((V.h - L.h) >> 1);
+      lcur.x = clamp(c.x - ox, 1, L.w - 2);
+      lcur.y = clamp(c.y - oy, 1, L.h - 2);
+      if (act) digAt(lcur.x, lcur.y, L.vz);
+    }
+  }
+
+  window.addEventListener("resize", function () {
+    var keep = L ? L.wi : -1;
+    resize();
+    if (W) buildOverview();
+    if (mode === "local" && keep >= 0) buildLocal(keep);
+  });
+
+  // ===========================================================================
+  // The loop
+  //
+  // Water runs on its own clock, not the frame's, so the simulation does not
+  // speed up on a fast display. Ticks per frame are capped: a flood that
+  // cannot keep up falls behind rather than dropping the frame.
+  // ===========================================================================
+  var TICK = 1 / 24, acc = 0, last = 0;
+
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000 || 0);
+    last = now;
+
+    if (L && !paused) {
+      acc += dt;
+      var t0 = performance.now(), ran = 0;
+      while (acc >= TICK && ran < 4) {
+        acc -= TICK; ran++;
+        L.ticks++;
+        for (var s = 0; s < L.springs.length; s++) {
+          var si = L.springs[s];
+          if (L.lvl[si] < 7) L.lvl[si] = 7;
+          wake(si);
+        }
+        // The mouth is woken whether or not it is holding anything. Waking
+        // it only when it happens to be wet stops the river dead the first
+        // tick it runs dry, because nothing upstream is ever asked again --
+        // the same class of mistake as waking one end of a move.
+        for (var q = 0; q < L.sinks.length; q++) {       // the water leaves
+          L.lvl[L.sinks[q]] = 0;
+          wakeAround(L.sinks[q]);
+        }
+        if (L.leaking.length && L.ticks % 3 === 0) seepTick();
+        var had = L.curN;
+        fluidTick();
+        // Ship the assertion, not just the benchmark: the first time the set
+        // drains, prove it drained because the water settled and not because
+        // a wake-up was missed. If it was missed, say so and recover.
+        if (had > 0 && L.curN === 0 && !L.drained) {
+          L.drained = true;
+          var missed = fullScanTick();
+          if (missed > 0) { L.leak = missed; reseedActive(); }
+        }
+        if (L.curN > 0) L.drained = false;
+      }
+      if (ran) stat.tickMs = stat.tickMs * 0.85 + ((performance.now() - t0) / ran) * 0.15;
+    }
+
+    buf.fill(0);
+    zbuf.fill(0);
+    if (mode === "world") { if (map) drawWorld(); }
+    else if (L) drawLocal();
+    drawShell();
+    if (gen.busy) drawBusy();
+    paint();
+    requestAnimationFrame(frame);
+  }
+
+  // ===========================================================================
+  // Boot
+  // ===========================================================================
+  resize();
+  startWorker();
+  generateWorld((Math.random() * 0xffffffff) >>> 0);
+  // Advances measured against a fallback face are wrong, so repaint once the
+  // real font lands.
+  if (document.fonts && document.fonts.ready)
+    document.fonts.ready.then(function () { resize(); });
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(frame); });
+})();
+</script>
+</body>
+</html>

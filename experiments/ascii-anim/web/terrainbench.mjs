@@ -127,11 +127,11 @@ function fluidTickJS(lvl, solid, w, h, d) {
         }
 
         const ns = [i - 1, i + 1, i - w, i + w];
-        for (let k = 0; k < 4 && v > 1; k++) {
+        for (let k = 0; k < 4; k++) {
           const j = ns[k];
           if (solid[j]) continue;
-          const u = lvl[j];
-          if (u + 1 < v) { lvl[j] = u + 1; lvl[i] = --v; moved++; }
+          const diff = v - lvl[j];
+          if (diff >= 2) { const mv = diff >> 1; lvl[j] += mv; v -= mv; lvl[i] = v; moved += mv; }
         }
       }
     }
@@ -306,11 +306,15 @@ function fluidTickActiveJS(lvl, solid, w, h, d, cur, curN, mark, nxt, nmark) {
     }
 
     const ns = [i - 1, i + 1, i - w, i + w];
-    for (let k = 0; k < 4 && v > 1; k++) {
+    for (let k = 0; k < 4; k++) {
       const j = ns[k];
       if (solid[j]) continue;
-      const u = lvl[j];
-      if (u + 1 < v) { lvl[j] = u + 1; lvl[i] = --v; moved++; touch(i, j); }
+      const diff = v - lvl[j];
+      if (diff >= 2) {
+        const mv = diff >> 1;
+        lvl[j] += mv; v -= mv; lvl[i] = v; moved += mv;
+        touch(i, j);
+      }
     }
   }
   for (let a = 0; a < curN; a++) mark[cur[a]] = 0;

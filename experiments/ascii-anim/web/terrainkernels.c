@@ -98,8 +98,11 @@ int carve_rivers(float *h, int n, int sources, int maxSteps,
 
 /* --- 3. Fluid tick -------------------------------------------------------
  * DF's 0-7 per-tile fill with gravity and diffusion, in place, bottom z
- * first. Pressure (the teleport rule) is left out: it is the rarer path and
- * this is the per-frame cost we are sizing. Returns units moved.
+ * first. Diffusion averages the two tiles, which is the rule the wiki
+ * describes; moving a single unit instead looks the same at rest but cannot
+ * carry water more than about seven tiles from a source, so a long channel
+ * starves. Pressure (the teleport rule) is left out: it is the rarer path
+ * and this is the per-frame cost we are sizing. Returns units moved.
  */
 int fluid_tick(unsigned char *lvl, unsigned char *solid, int w, int h, int d) {
   int moved = 0;
@@ -127,15 +130,16 @@ int fluid_tick(unsigned char *lvl, unsigned char *solid, int w, int h, int d) {
         }
 
         int ns[4]; ns[0] = i - 1; ns[1] = i + 1; ns[2] = i - w; ns[3] = i + w;
-        for (int k = 0; k < 4 && v > 1; k++) {
+        for (int k = 0; k < 4; k++) {
           int j = ns[k];
           if (S[j]) continue;
-          int u = L[j];
-          if (u + 1 < v) {
-            L[j] = (unsigned char)(u + 1);
-            v--;
+          int diff = v - L[j];
+          if (diff >= 2) {              /* average the pair, as DF describes */
+            int mv = diff >> 1;
+            L[j] = (unsigned char)(L[j] + mv);
+            v -= mv;
             L[i] = (unsigned char)v;
-            moved++;
+            moved += mv;
           }
         }
       }
