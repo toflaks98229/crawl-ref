@@ -423,11 +423,47 @@ so a freestanding build has to supply one. That is the whole libc
 
 ---
 
+## 11. The underground
+
+The local map was twenty levels of one grey rock with an aquifer band in it,
+which wastes the only thing a z-level map is for. It now carries what DF puts
+under a fort, and all of it is read off fields the generator was already
+producing:
+
+- **Stone in layers.** Soil on top, a sedimentary band under it, igneous rock
+  below that. **Volcanism decides how shallow the igneous starts** — measured
+  across a spread of tiles, a volcanic embark is three-quarters igneous and a
+  quiet one is almost none. Rainfall decides how deep the soil cap goes. The
+  boundaries wander with a noise field rather than lying flat.
+- **Ore and gems in clusters**, grown by a short random walk from a seed cell
+  the way a vein actually runs, rather than scattered per cell. Ore in either
+  stone, gems only in the igneous, both richer where the world is volcanic —
+  the second thing that field now decides. Roughly fifty ore and ten gem cells
+  in a map of sixty thousand, which is about as sparse as DF and reads as the
+  occasional orange `*` in a wall.
+- **A cavern**, two levels tall, wherever a noise field opens up and there is
+  rock to spare above it, with standing water in its deeper half in proportion
+  to how wet the region is. Sink a shaft and you break into it; whether that
+  is a discovery or a drowning depends on the region's rainfall and drainage.
+- **Twenty levels instead of fourteen**, sea level at nine. Soil, a
+  sedimentary band, an aquifer, a cavern under that and magma at the bottom do
+  not fit in five levels of underground, and squeezing them collapsed the
+  cavern to a single level.
+
+The status line reads out the material under the cursor, so the layering is
+legible while you dig rather than only in the code.
+
+None of this changes the fluid costs: an embark that breaks into a flooded
+cavern still ticks at a few hundredths of a millisecond, and the drain
+assertion stays quiet.
+
+---
+
 ## Files
 
 | file | what |
 |---|---|
-| `web/watertable.html` | the prototype: world generation in a worker, biome by threshold, carved rivers, rejection, z-levels, fluid on an active set, and pressure on a toggle |
+| `web/watertable.html` | the prototype: world generation in a worker, biome by threshold, carved rivers, rejection, z-levels, fluid on an active set, pressure on a toggle, and an underground of layered stone, veins and caverns |
 | `web/terrainkernels.c` | the three kernels, C → wasm32; the build line is in its header |
 | `web/terrainbench.mjs` | the JS mirrors, the A-B harness, the active-set test and the two assertions. Builds the `.wasm` on demand |
 | `web/capabilities.html` | what a browser allows with no server. Open it over `file://` and over `http://` and compare |

@@ -109,7 +109,12 @@
     "#a6dcff", // 36 water 7
     "#12121f", // 37 sky / open
     "#d24b16", // 38 magma
-    "#151a2c"  // 38+ panel ground
+    "#151a2c", // 39 panel ground
+    "#6b6152", "#4b4438", "#312c24",   // 40-42 sedimentary stone
+    "#4a4a58", "#33333e", "#222229",   // 43-45 igneous stone
+    "#b08640", "#7a5c2b", "#4a3819",   // 46-48 ore
+    "#63e0d0", "#3f9a90", "#27605a",   // 49-51 gem
+    "#ff8a3d", "#c2521a", "#7d3210"    // 52-54 magma, by depth
   ];
   var C = { ink:17, dim:18, frame:19, label:20, warn:21, good:22, rule:23,
             sky:37, panel:39 };
@@ -769,11 +774,25 @@
   // One world tile, opened up into z-levels. Rock, soil, an aquifer band, the
   // river if the tile has one, and the sea if the tile is under it.
   // ===========================================================================
-  var MAT = { OPEN:0, SOIL:1, ROCK:2, AQUIFER:3 };
-  var MATC = [null, [24,25,26], [27,28,29], [30,31,32]];
+  // Rock is not one thing. DF gives a fort a soil cap, a sedimentary band
+  // and igneous rock underneath, with ore and gems in clusters -- and that
+  // layering is most of what makes digging worth doing. Volcanism decides how
+  // shallow the igneous starts, which is the first real use this prototype
+  // makes of that field.
+  var MAT = { OPEN:0, SOIL:1, SEDIMENT:2, AQUIFER:3, IGNEOUS:4, ORE:5, GEM:6 };
+  var MATC = [null, [24,25,26], [40,41,42], [30,31,32],
+                    [43,44,45], [46,47,48], [49,50,51]];
+  // A wall at your own level. Anything below is a top seen from above and
+  // uses the floor glyph instead.
+  var MATG = [" ", "#", "#", "#", "#", "*", "*"];
+  var MATN = ["", "soil", "sedimentary rock", "aquifer", "igneous rock",
+              "ore", "gems"];
   var WATER_G = [" ", ".", ".", "~", "~", "≈", "≈", "≈"];
   var WATER_C = [0, 33, 33, 34, 34, 35, 35, 36];
-  var LD = 14, SEA_Z = 5;
+  // Twenty levels, sea level at nine. The underground is the point of a
+  // z-level map and it needs room: soil, a sedimentary band, an aquifer, a
+  // cavern under that and magma at the bottom do not fit in five.
+  var LD = 20, SEA_Z = 9;
 
   var L = null;
   var lcur = { x:0, y:0 };
@@ -850,19 +869,86 @@
     // single most memorable thing that happens to a new DF fort.
     var drain = W.drain[wi], rain = W.rain[wi], volc = W.volc[wi];
     var hasAq = drain < 0.46 || rain > 0.56;
-    var aqTop = clamp(avg - 2, 1, LD - 4), aqBot = Math.max(1, aqTop - 1);
+    var aqTop = clamp(avg - 3, 4, LD - 5), aqBot = aqTop - 1;
+
+    // Layer boundaries wander rather than lying flat, and the igneous rock
+    // comes up to meet you where the world is volcanic.
+    var LAY = 65, lay = lds(LAY, (gen.seed ^ (wi * 40503) ^ 0x5bf03635) >>> 0, 0.5);
+    var soilDeep = rain > 0.55 ? 2 : 1;
+    var sedThick = 2 + Math.round((1 - volc) * 4);
+
+    // A cavern, two levels tall, wherever the noise opens up and there is
+    // rock to spare above it. Dig down far enough and you break into it --
+    // which, if its floor is wet, is the second most memorable thing that
+    // happens to a fort.
+    var CAV = 129, cavN = lds(CAV, (gen.seed ^ (wi * 2246822519)) >>> 0, 0.56);
+    var cavTop = clamp(aqBot - 3, 3, LD - 8), cavBot = cavTop - 1;
+    var cavWet = clamp((rain * 0.6 + (1 - drain) * 0.4), 0, 1);
+    var cavCells = 0;
 
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
       var p = y * w + x, sz = surface[p];
+      var jit = Math.round((lay[Math.min(LAY-1, (y * LAY / h) | 0) * LAY
+                              + Math.min(LAY-1, (x * LAY / w) | 0)] - 0.5) * 3);
+      var soilBot = sz - soilDeep + 1;
+      var sedBot = soilBot - sedThick + jit;
       for (var z2 = 0; z2 <= sz; z2++) {
         var i = z2 * plane + p;
-        mat[i] = (z2 >= sz - 1) ? MAT.SOIL : MAT.ROCK;
-        if (hasAq && z2 <= aqTop && z2 >= aqBot && mat[i] === MAT.ROCK) mat[i] = MAT.AQUIFER;
+        mat[i] = z2 >= soilBot ? MAT.SOIL : (z2 >= sedBot ? MAT.SEDIMENT : MAT.IGNEOUS);
+        if (hasAq && z2 <= aqTop && z2 >= aqBot && mat[i] !== MAT.SOIL) mat[i] = MAT.AQUIFER;
       }
-      if (volc > 0.62) { mat[p] = MAT.OPEN; magma[p] = 1; }   // a hot floor
+      // the cavern
+      if (sz > cavTop + 2) {
+        var cv = cavN[Math.min(CAV-1, (y * CAV / h) | 0) * CAV
+                    + Math.min(CAV-1, (x * CAV / w) | 0)];
+        if (cv > 0.58 && x > 0 && y > 0 && x < w - 1 && y < h - 1) {
+          for (var zc2 = cavBot; zc2 <= cavTop; zc2++) mat[zc2 * plane + p] = MAT.OPEN;
+          cavCells++;
+          // standing water in the deeper half of it, in proportion to how
+          // wet the region is
+          if (cv > 0.58 + (1 - cavWet) * 0.22) lvl[cavBot * plane + p] = 7;
+        }
+      }
+      if (volc > 0.55) { mat[p] = MAT.OPEN; magma[p] = 1; }   // a hot floor
       // the sea, and anything else standing below sea level
       for (var z3 = sz + 1; z3 <= SEA_Z; z3++) lvl[z3 * plane + p] = 7;
     }
+
+    // Ore and gems in clusters, grown by a short random walk from a seed
+    // cell. Ore anywhere in stone, gems only in the igneous, richer where
+    // the world is volcanic -- which is the second thing volcanism decides.
+    var vr = (gen.seed ^ (wi * 2654435761) ^ 0x9e3779b9) >>> 0 || 1;
+    function vrand() { vr ^= vr << 13; vr ^= vr >>> 17; vr ^= vr << 5; return (vr >>>= 0); }
+    var veins = 0, gemCells = 0, oreCells = 0;
+    function growVein(kind, want, onlyIgneous) {
+      for (var tries = 0; tries < want * 40 && veins < want; tries++) {
+        var x2 = 2 + vrand() % (w - 4), y2 = 2 + vrand() % (h - 4);
+        var p2 = y2 * w + x2, top = surface[p2] - 2;
+        if (top < 1) continue;
+        var z4 = 1 + vrand() % top;
+        var i2 = z4 * plane + p2;
+        var host = mat[i2];
+        if (host !== MAT.SEDIMENT && host !== MAT.IGNEOUS) continue;
+        if (onlyIgneous && host !== MAT.IGNEOUS) continue;
+        veins++;
+        var run = 3 + vrand() % (onlyIgneous ? 4 : 9);
+        for (var k2 = 0; k2 < run; k2++) {
+          if (mat[i2] === MAT.SEDIMENT || mat[i2] === MAT.IGNEOUS) {
+            mat[i2] = kind;
+            if (kind === MAT.GEM) gemCells++; else oreCells++;
+          }
+          var dir = vrand() % 6, ni = i2;
+          if (dir === 0) ni = i2 - 1; else if (dir === 1) ni = i2 + 1;
+          else if (dir === 2) ni = i2 - w; else if (dir === 3) ni = i2 + w;
+          else if (dir === 4) ni = i2 - plane; else ni = i2 + plane;
+          if (ni < 0 || ni >= cells) break;
+          i2 = ni;
+        }
+      }
+    }
+    var rich = 0.6 + volc * 0.9;
+    veins = 0; growVein(MAT.ORE, Math.round(plane / 260 * rich), false);
+    veins = 0; growVein(MAT.GEM, Math.round(plane / 900 * rich), true);
 
     // The river, if the world says this tile has one. Its head is refilled
     // every tick -- a permanent source, measured at 0.03ms/tick on an active
@@ -904,7 +990,7 @@
           var floor = fall ? 0 : bed;
           for (var zc = floor; zc <= top && zc < LD; zc++) mat[zc * plane + pp] = MAT.OPEN;
           for (var zb = 0; zb < floor; zb++)               // a bed to run on
-            if (!mat[zb * plane + pp]) mat[zb * plane + pp] = MAT.ROCK;
+            if (!mat[zb * plane + pp]) mat[zb * plane + pp] = MAT.SEDIMENT;
           for (var zw = 0; zw < LD; zw++) lvl[zw * plane + pp] = 0;
           surface[pp] = floor - 1;
           if (fall) {
@@ -932,6 +1018,7 @@
           psortA:psortA, psortB:psortB,
           springs:springs, sinks:sinks, leaking:[], leakSet:new Uint8Array(cells),
           hasAq:hasAq, aqTop:aqTop, vz:clamp(avg + 1, 1, LD - 2),
+          cavCells:cavCells, cavTop:cavTop, oreCells:oreCells, gemCells:gemCells,
           ticks:0, moved:0, drained:false, leak:0, dug:0,
           pressMoved:0, pressCells:0 };
     lcur.x = w >> 1; lcur.y = h >> 1;
@@ -1225,11 +1312,11 @@
           // above, and the first level down is the ordinary case rather than
           // something distant, so the dimming starts from the second.
           var shade = dep === 0 ? 0 : clamp(dep - 1, 0, 2);
-          put(ox + x, oy + y, dep === 0 ? GI["#"] : GI["."], cc[shade], Z.GROUND);
+          put(ox + x, oy + y, GI[dep === 0 ? MATG[L.mat[i]] : "."], cc[shade], Z.GROUND);
           drew = true; break;
         }
         if (z === 0 && L.magma[p]) {
-          put(ox + x, oy + y, GI["~"], 38, Z.GROUND);
+          put(ox + x, oy + y, GI["~"], 52 + Math.min(dep, 2), Z.GROUND);
           drew = true; break;
         }
       }
@@ -1269,12 +1356,19 @@
                    + "   " + gen.ms + "ms") : "";
     putStr(cols - 2 - right.length, 1, right, C.dim, Z.UI);
 
-    putStr(2, rows - 3, statusLine(), C.dim, Z.UI);
-    putStr(2, rows - 2, keysLine(), C.label, Z.UI);
+    // Two rows, each with something on the left and something on the right,
+    // and the left gives way first: a readout that runs off the edge of the
+    // frame is worse than a readout that stops early.
+    var right = mode === "world" || !L ? "" : underCursor();
+    putStr(2, rows - 3, fit(statusLine(), cols - 6 - right.length), C.dim, Z.UI);
+    if (right) putStr(cols - 2 - right.length, rows - 3, right, C.ink, Z.UI);
 
     var perf = "paint " + stat.paintMs.toFixed(1) + "ms  " + stat.dirty + " cells";
+    putStr(2, rows - 2, fit(keysLine(), cols - 6 - perf.length), C.label, Z.UI);
     putStr(cols - 2 - perf.length, rows - 2, perf, C.rule, Z.UI);
   }
+
+  function fit(s, n) { return s.length <= n ? s : s.slice(0, Math.max(0, n - 1)) + "\u00b7"; }
 
   function statusLine() {
     if (!W) return "Generating…";
@@ -1297,13 +1391,27 @@
       + "   active " + rpad(L.curN, 5)
       + "   flow " + stat.tickMs.toFixed(2) + "ms"
       + "   pressure " + (pressure
-          ? stat.pressMs.toFixed(2) + "ms over " + rpad(L.pressCells, 5) + " cells"
+          ? stat.pressMs.toFixed(2) + "ms/" + L.pressCells
           : "off")
-      + (L.hasAq ? ("   aquifer at " + L.aqTop + (L.leaking.length ? " LEAKING" : "")) : "   no aquifer")
-      + (L.springs.length ? (L.curN ? "   river draining" : "   river settled") : "")
+      + (L.hasAq ? ("   aquifer " + L.aqTop + (L.leaking.length ? " LEAKING" : "")) : "")
+      + "   cavern " + L.cavTop
+      + (L.springs.length ? (L.curN ? "   river running" : "   river settled") : "")
       + (paused ? "   PAUSED" : "")
       + (L.leak ? "   DRAIN CHECK FAILED: " + L.leak + " units" : "");
   }
+  // What the cursor is actually pointing at, looking down from the current
+  // level -- the same scan the renderer does.
+  function underCursor() {
+    var p = lcur.y * L.w + lcur.x;
+    for (var z = L.vz; z >= 0; z--) {
+      var i = z * L.plane + p, dn = L.vz - z;
+      if (L.lvl[i]) return "water " + L.lvl[i] + "/7" + (dn ? " " + dn + " down" : "");
+      if (L.mat[i]) return MATN[L.mat[i]] + (dn ? ", " + dn + " down" : "");
+      if (z === 0 && L.magma[p]) return "magma";
+    }
+    return "open air";
+  }
+
   function keysLine() {
     return mode === "world"
       ? "[G] another world   [arrows/WASD] cursor   [Enter] embark here"
