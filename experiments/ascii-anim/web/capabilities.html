@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runtime capability probe</title>
+<style>
+  body { background:#101014; color:#c8c8d0; font:14px/1.6 ui-monospace,Consolas,monospace;
+         margin:0; padding:24px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 4px; color:#e8e8f0; }
+  p.sub { margin:0 0 20px; color:#787888; max-width:62ch; }
+  table { border-collapse:collapse; }
+  td { padding:3px 18px 3px 0; vertical-align:top; }
+  td.k { color:#9898a8; }
+  .ok { color:#6ec46e; } .no { color:#d06a6a; } .wait { color:#787888; }
+  .note { color:#787888; }
+</style>
+</head>
+<body>
+<h1>Runtime capability probe</h1>
+<p class="sub">
+  A diagnostic, not a game surface &mdash; plain DOM on purpose. It answers the
+  question that decides the architecture: what still works when a page is opened
+  straight from disk, with no server. Open this file twice, once over
+  <code>file://</code> and once over <code>http://</code>, and compare.
+</p>
+<table id="out"></table>
+<script>
+(function () {
+  var out = document.getElementById("out");
+  var rows = {};
+  function row(k, cls, v) {
+    if (!rows[k]) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td class="k"></td><td></td>';
+      tr.firstChild.textContent = k;
+      out.appendChild(tr);
+      rows[k] = tr.lastChild;
+    }
+    rows[k].className = cls;
+    rows[k].textContent = v;
+  }
+  ["origin", "blob worker", "transferable buffer", "SharedArrayBuffer",
+   "wasm, inlined", "wasm, fetched"].forEach(function (k) { row(k, "wait", "…"); });
+
+  row("origin", "note", location.protocol + "  crossOriginIsolated=" + !!self.crossOriginIsolated);
+
+  function worker(src) {
+    return new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  }
+  function ask(wk, msg, transfer) {
+    return new Promise(function (res, rej) {
+      wk.onmessage = function (e) { res(e.data); };
+      wk.onerror = function (e) { rej(new Error(e.message || "worker error")); };
+      transfer ? wk.postMessage(msg, transfer) : wk.postMessage(msg);
+      setTimeout(function () { rej(new Error("timed out")); }, 4000);
+    });
+  }
+
+  (async function () {
+    try {
+      var w = worker("onmessage=function(e){var s=0;for(var i=0;i<1e6;i++)s+=i;postMessage(s);}");
+      await ask(w, 1);
+      row("blob worker", "ok", "yes — background work needs no server");
+    } catch (e) { row("blob worker", "no", "no — " + e.message); }
+
+    try {
+      var w2 = worker("onmessage=function(e){postMessage(e.data,[e.data]);}");
+      var buf = new ArrayBuffer(1 << 20);
+      var back = await ask(w2, buf, [buf]);
+      row("transferable buffer", "ok",
+          "yes — 1MB handed over and back, source detached: " + (buf.byteLength === 0));
+    } catch (e) { row("transferable buffer", "no", "no — " + e.message); }
+
+    try {
+      new SharedArrayBuffer(8);
+      row("SharedArrayBuffer", "ok", "yes — a worker can share a grid in place");
+    } catch (e) {
+      row("SharedArrayBuffer", "no",
+          "no — needs COOP/COEP headers, so it needs a server. Copy or transfer instead.");
+    }
+
+    // A 12-byte module that exports one function, as base64 in the page.
+    var B64 = "AGFzbQEAAAABBgFgAX8BfwMCAQAHBwEDaW5jAAAKCQEHACAAQQFqCw==";
+    try {
+      var bin = Uint8Array.from(atob(B64), function (c) { return c.charCodeAt(0); });
+      var m = await WebAssembly.instantiate(bin, {});
+      row("wasm, inlined", "ok",
+          "yes — inc(41) = " + m.instance.exports.inc(41) +
+          ", so wasm costs the single-file property nothing");
+    } catch (e) { row("wasm, inlined", "no", "no — " + e.message); }
+
+    try {
+      var r = await fetch("terrainkernels.wasm");
+      row("wasm, fetched", "ok", "yes — HTTP " + r.status + ", a sibling .wasm loads directly");
+    } catch (e) {
+      row("wasm, fetched", "no",
+          "no — " + e.message + ". Over file:// a .wasm must be inlined as base64.");
+    }
+  })();
+})();
+</script>
+</body>
+</html>

@@ -4,3 +4,6 @@ __pycache__/
 # Playwright screenshots from the verification scripts; they land here when a
 # script is run with the repo as its working directory.
 *.png
+
+# built by terrainbench.mjs
+*.wasm
