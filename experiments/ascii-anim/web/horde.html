@@ -143,7 +143,7 @@
   var cols = 0, rows = 0, buf = null, prev = null, forceFull = true;
   var counts = null, owner = null;
   var F = { x:1, y:3, w:10, h:10 };           // the field, in cells
-  var you, foes, gems, fx, fires, t, over_, paused, kills, stat, offer, hitRects;
+  var you, foes, gems, fx, fires, ash, t, over_, paused, kills, stat, offer, hitRects;
   var keys = Object.create(null);
   var shake = 0, flash = 0;
   // banish_animation (view.cc:469): cells wink out with rising probability and
@@ -323,7 +323,10 @@
   // Chrome, drawn as characters
   // ===========================================================================
   function drawShell() {
-    var c = C.frame;
+    // The player's eyes are on the field, not the bar, so the frame carries the
+    // warning: it reddens below a third and pulses on the beat of the i-frame.
+    var low = you.hp < you.maxhp / 3;
+    var c = low && (Math.floor(t * 2.6) % 2 === 0) ? C.hurt : C.frame;
     // outer frame
     hfill(1, 0, cols - 2, "═", c, Z.UI);
     hfill(1, rows - 1, cols - 2, "═", c, Z.UI);
@@ -336,6 +339,35 @@
     // rules above and below the field
     hfill(1, 2, cols - 2, "═", c, Z.UI);
     hfill(1, rows - 4, cols - 2, "═", c, Z.UI);
+
+    // Foes walk in from a circle wider than the field is tall, so a wall
+    // closing from above is otherwise unannounced. Project everything off
+    // screen onto the frame it is pressing against.
+    var press = {};
+    for (var pi = 0; pi < foes.length; pi++) {
+      var pm = foes[pi];
+      if (pm.dead || onScreen(pm)) continue;
+      var pcx = Math.round(toCellX(pm.x)), pcy = Math.round(toCellY(pm.y));
+      var overT = F.y - pcy, overB = pcy - (F.y + F.h - 1);
+      var overL = F.x - pcx, overR = pcx - (F.x + F.w - 1);
+      var worst = Math.max(overT, overB, overL, overR);
+      if (worst <= 0) continue;
+      var kx2, ky2;
+      if (worst === overT || worst === overB) {
+        kx2 = Math.max(1, Math.min(cols - 2, pcx));
+        ky2 = worst === overT ? 2 : rows - 4;
+      } else {
+        kx2 = worst === overL ? 0 : cols - 1;
+        ky2 = Math.max(F.y, Math.min(F.y + F.h - 1, pcy));
+      }
+      var key = kx2 + "," + ky2;
+      press[key] = (press[key] || 0) + 1;
+    }
+    for (var pk in press) {
+      var pp = pk.split(","), pn = press[pk];
+      put(+pp[0], +pp[1], RAMP[Math.min(RAMP.length - 1, pn + 3)],
+          pn > 3 ? C.hurt : C.label, Z.UI);
+    }
 
     var s = statsOf();
     var right = cols - 2;
@@ -386,7 +418,11 @@
       if (a.def.kind === "passive") putStr(x, y, "\u00b7", C.frame, Z.UI);
       else {
         var p = a.def.per(a.lv), full = Math.max(0.05, p.cd * s.haste);
-        var done = 1 - Math.max(0, a.t) / full;
+        // Taking the Hourglass, or levelling the weapon, shortens the cooldown
+        // while the time already left on it does not change, so progress can
+        // read negative for one cycle. Clamp it, or the frame index goes below
+        // zero and the pip reads an undefined frame.
+        var done = Math.max(0, Math.min(1, 1 - Math.max(0, a.t) / full));
         if (done > 0.93) {
           var bf = SPIN.balloon.frames;
           putStr(x, y, bf[Math.floor(t * 1000 / SPIN.balloon.interval) % bf.length],
@@ -416,6 +452,13 @@
       var h = (wx * 73856093 ^ wy * 19349663) >>> 0;
       var g = (h % 23 === 0) ? GI[","] : (h % 11 === 0) ? GI["."] : 0;
       put(F.x + cx, F.y + cy, g, (h % 23 === 0) ? C.grass : C.grass2, Z.GROUND);
+    }
+
+    // ash: what the ground remembers, fading over a couple of seconds
+    for (var aI = 0; aI < ash.length; aI++) {
+      var a2 = ash[aI];
+      put(toCellX(a2.x), toCellY(a2.y),
+          GI[a2.life > a2.max * 0.5 ? "," : "."], C.grass, Z.GROUND);
     }
 
     for (var i = 0; i < gems.length; i++) {
@@ -559,8 +602,8 @@
       putStr(x + 9, ry, d.name, C.ink, Z.UI);
       var lv = have ? "lv " + have.lv + " -> " + (have.lv + 1) : "new";
       putStr(x + w - lv.length - 3, ry, lv, C.label, Z.UI);
-      putStr(x + 7, ry + 1, d.desc.slice(0, w - 11), C.dim, Z.UI);
-      if (d.src) putStr(x + 7, ry + 2, d.src.slice(0, w - 11), C.frame, Z.UI);
+      putStr(x + 7, ry + 1, d.desc.slice(0, w - 9), C.dim, Z.UI);
+      if (d.src) putStr(x + 7, ry + 2, d.src.slice(0, w - 9), C.frame, Z.UI);
       hitRects.push({ x:x + 1, y:ry, w:w - 2, h:3, i:i });
       ry += 4;
     });
@@ -734,16 +777,32 @@
     if (fx.length > 260) return;
     fx.push({ k:"num", x:x, y:y, s:String(Math.round(v)), c:c || C.ink, life:0.5, max:0.5 });
   }
-  function hurtFoe(m, dmg, colour) {
+  // sx, sy is where the blow came from, so the foe can be shoved away from it.
+  function hurtFoe(m, dmg, colour, sx, sy) {
     m.hp -= dmg;
     m.hurt = 0.07;
-    num(m.x, m.y, dmg, colour || C.ink);
+    // One number per foe per short window, instead of one per hit: two hits in
+    // the same cell on the same tick used to render as "3232".
+    m.pend += dmg;
+    m.pendC = colour || C.ink;
+    m.pendT = 0.15;
+    if (sx !== undefined) {
+      var dx = m.x - sx, dy = m.y - sy, d = Math.hypot(dx, dy) || 1;
+      var push = Math.min(30, 4 + dmg * 0.6);
+      m.kx += dx / d * push;
+      m.ky += dy / d * push;
+    }
     if (m.hp <= 0) {
       m.dead = true;
       kills++;
+      num(m.x, m.y, m.pend, m.pendC);
+      m.pend = 0;
       fx.push({ k:"pop", x:m.x, y:m.y, c:m.def.c, life:0.22, max:0.22 });
       gems.push({ x:m.x, y:m.y, v:m.def.hp > 20 ? 5 : 1, pull:false });
       if (gems.length > 220) gems.shift();
+      // the field keeps some memory of what happened here
+      ash.push({ x:m.x, y:m.y, life:2.4, max:2.4 });
+      if (ash.length > 320) ash.shift();
     }
   }
   function foesIn(x, y, r) {
@@ -814,19 +873,19 @@
           var t2 = ((m.x - you.x) * dx + (m.y - you.y) * dy) / (L2 * L2);
           if (t2 < 0 || t2 > 1.9) return;
           if (Math.hypot(m.x - (you.x + dx * t2), m.y - (you.y + dy * t2)) < 1.6)
-            hurtFoe(m, p.dmg, 15);
+            hurtFoe(m, p.dmg, 15, you.x, you.y);
         });
       }
 
     } else if (a.def.id === "censer") {
       fx.push({ k:"ring", x:you.x, y:you.y, r:p.r, g:"o", c:C.us, life:0.34, max:0.34 });
-      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us); });
+      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us, you.x, you.y); });
 
     } else if (a.def.id === "firepot") {
       var tg = nearestFoe(you.x, you.y);
       var cx = tg ? tg.x : you.x + 6, cy = tg ? tg.y : you.y;
       fx.push({ k:"burst", x:cx, y:cy, r:p.r, c:12, life:0.42, max:0.42 });
-      foesIn(cx, cy, p.r).forEach(function (m) { hurtFoe(m, p.dmg, 12); });
+      foesIn(cx, cy, p.r).forEach(function (m) { hurtFoe(m, p.dmg, 12, cx, cy); });
       lightFire(cx, cy, p.r, p.dmg);
 
     } else if (a.def.id === "arc") {
@@ -837,13 +896,13 @@
         chain.push(nx);
         fx.push({ k:"line", x0:from.x, y0:from.y, x1:nx.x, y1:nx.y,
                   g:"|", c:11, life:0.22, max:0.22 });
-        hurtFoe(nx, p.dmg, 11);
+        hurtFoe(nx, p.dmg, 11, from.x, from.y);
         from = nx;
       }
 
     } else if (a.def.id === "lantern") {
       fx.push({ k:"wave", x:you.x, y:you.y, r:p.r, c:C.us, life:0.85, max:0.85 });
-      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us); });
+      foesIn(you.x, you.y, p.r).forEach(function (m) { hurtFoe(m, p.dmg, C.us, you.x, you.y); });
       flash = 0.16;
     }
   }
@@ -864,7 +923,7 @@
       var an = rnd(Math.PI * 2), rad = F.w * 0.62;
       foes.push({ def:def, x:you.x + Math.cos(an) * rad, y:you.y + Math.sin(an) * rad * 0.9,
                   hp:def.hp * (1 + minute * 0.62), hurt:0, dead:false, ph:rnd(6.3),
-                  fade:1 });
+                  fade:1, kx:0, ky:0, pend:0, pendT:0, pendC:C.ink });
     }
   }
 
@@ -897,6 +956,17 @@
       if (m.dead) continue;
       m.hurt -= dt;
       if (m.fade > 0) m.fade = Math.max(0, m.fade - dt * 2.2);
+      if (m.pendT > 0) {
+        m.pendT -= dt;
+        if (m.pendT <= 0 && m.pend > 0) { num(m.x, m.y, m.pend, m.pendC); m.pend = 0; }
+      }
+      if (m.kx || m.ky) {
+        m.x += m.kx * dt; m.y += m.ky * dt;
+        var decay = Math.pow(0.004, dt);
+        m.kx *= decay; m.ky *= decay;
+        if (Math.abs(m.kx) < 0.05) m.kx = 0;
+        if (Math.abs(m.ky) < 0.05) m.ky = 0;
+      }
       var dx = you.x - m.x, dy = you.y - m.y, d = Math.hypot(dx, dy) || 1;
       var wob = m.def.weave ? Math.sin(t * 5 + m.ph) * 0.55 : 0;
       m.x += (dx / d + (-dy / d) * wob) * m.def.sp * dt;
@@ -923,6 +993,11 @@
           if (you.xp >= you.need) levelUp();
         }
       }
+    }
+
+    for (var aJ = ash.length - 1; aJ >= 0; aJ--) {
+      ash[aJ].life -= dt;
+      if (ash[aJ].life <= 0) ash.splice(aJ, 1);
     }
 
     stepFires(dt);
@@ -1065,7 +1140,7 @@
 
   function start() {
     over_ = null; paused = false; t = 0; kills = 0;
-    foes = []; gems = []; fx = []; fires = []; offer = null; hitRects = null;
+    foes = []; gems = []; fx = []; fires = []; ash = []; offer = null; hitRects = null;
     shake = 0; flash = 0; banish = null;
     stat = { dirty:0, ms:0 };
     you = { x:0, y:0, hp:100, maxhp:100, lv:1, xp:0, need:5,

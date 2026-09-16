@@ -1,5 +1,7 @@
 # Lantern Hours — presentation backlog
 
+**Tiers 1 and 2 are done** (items 1-8). Tier 3 and 4 remain.
+
 Ordered. Each item says what the code does *now*, so the gap is checkable
 rather than a matter of taste. "Reuses" names machinery that already exists,
 because almost none of this needs new systems.
@@ -8,7 +10,7 @@ because almost none of this needs new systems.
 
 ## Tier 1 — the effects that read as placeholder
 
-### 1. The whip does not swing
+### ~~DONE~~ 1. The whip does not swing
 
 **Now:** `fireArm` pushes a `line` effect with `x1 = you.x ± len, y1 = you.y`.
 It is a horizontal ray that extends outward; the arm never moves through an
@@ -25,7 +27,7 @@ behind it the way `bolt::draw` deliberately does not clean up. Lift that.
 
 **Cost:** small. One new `fx` kind, ~25 lines.
 
-### 2. The fire is a rectangle that does not move
+### ~~DONE~~ 2. The fire is a rectangle that does not move
 
 **Now:** `lightFire` seeds the whole bottom row of a `w × h` grid at full
 heat, so the base is a hard-edged rectangle with a straight bottom, and the
@@ -45,7 +47,7 @@ drift term change.
 
 **Cost:** small. The disc and the flicker are a few lines each.
 
-### 3. `banish_animation` is the one primitive this game never uses
+### ~~DONE~~ 3. `banish_animation` is the one primitive this game never uses
 
 **Now:** of the seven ported at the start of the project, six are in play —
 `bolt::draw` (whip, knives, arc), `bolt::explode` (fire pot),
@@ -70,7 +72,7 @@ is not called anywhere.
 
 ## Tier 2 — weight and readability
 
-### 4. Being hit does not move anything
+### ~~DONE~~ 4. Being hit does not move anything
 
 **Now:** `hurtFoe` sets `m.hurt = 0.07`, which only swaps the foe's colour to
 white for four frames. A foe struck by a battleaxe-equivalent and a foe
@@ -83,7 +85,7 @@ good.
 
 **Cost:** small. A `kx, ky` on each foe, decayed in `step`.
 
-### 5. Kills leave nothing behind
+### ~~DONE~~ 5. Kills leave nothing behind
 
 **Now:** a `pop` effect for 0.22s, a gem, and the foe is gone the same frame.
 At a few hundred kills a minute the field has no memory of what happened.
@@ -95,7 +97,7 @@ over a couple of seconds. Cheap, and it makes a cleared lane visible.
 
 **Cost:** small, but watch the cap — a few hundred marks, oldest dropped.
 
-### 6. Damage numbers collide into nonsense
+### ~~DONE~~ 6. Damage numbers collide into nonsense
 
 **Now:** every hit pushes its own `num`. Two foes struck in the same cell in
 the same tick render as `3232`, which was visible in testing.
@@ -106,7 +108,7 @@ numbers, and fewer effect entries.
 
 **Cost:** small.
 
-### 7. Low health has no tell
+### ~~DONE~~ 7. Low health has no tell
 
 **Now:** the HP bar shrinks. Nothing else changes, and the player's eyes are
 on the field, not the bar.
@@ -119,7 +121,7 @@ element always in peripheral vision.
 
 **Cost:** trivial.
 
-### 8. Pressure from off screen is invisible
+### ~~DONE~~ 8. Pressure from off screen is invisible
 
 **Now:** the field is 96 by 46 world units while foes walk in from a circle
 wider than either — the same asymmetry that was making weapons aim at
