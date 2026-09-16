@@ -3,6 +3,15 @@
 `crawl-ref/` is the upstream Dungeon Crawl Stone Soup tree — follow its own
 style there. Everything below governs new work, which lives in `experiments/`.
 
+## The project
+
+`experiments/ascii-anim/web/horde.html` — **Lantern Hours**, an ASCII
+survivors-like — is the one being built. Every weapon in it is drawn by one of
+the seven Crawl animation primitives ported in `experiments/ascii-anim/`, and
+its whole interface is characters in the same grid as the game. The other
+pages there are the studies that led to it; treat them as reference, not as
+things to keep in step.
+
 ## Visual style: console text cells, not square tiles
 
 Every grid-based visual — game boards, maps, effect surfaces, anything laid out
@@ -44,3 +53,24 @@ out both ways.
 
 Re-measure after webfonts load (`document.fonts.ready`) — advances measured
 against a fallback face are wrong.
+
+## Interface: the screen is one grid
+
+There is no HTML chrome. The frame, the status lines, the bars, the loadout,
+the menus and the field are all characters in a single cell grid on one
+canvas, and they all go through the same `put` / `putStr` / `panel` calls the
+game does. A new panel is drawn, not marked up.
+
+Bars are `[====----]` in plain ASCII. Frames use the double line
+(`═ ║ ╔ ╗ ╚ ╝`) for a container and the single line for anything nested, which
+is the split the battle game already uses between an active drag and a
+standing selection. Menu items read `[1] Name`, chosen by the matching key,
+with a click on the row as a second route.
+
+Because the interface is drawn rather than laid out, it costs nothing to
+repaint: the dirty diff covers it along with everything else. Keep it that
+way — reaching for a DOM element for a new readout breaks the one rule this
+design has.
+
+Keep a visually hidden heading, a key summary, and an `aria-live` status line
+in the markup. A canvas says nothing to a screen reader on its own.
