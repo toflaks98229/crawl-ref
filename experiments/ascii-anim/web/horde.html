@@ -146,6 +146,10 @@
   var you, foes, gems, fx, fires, t, over_, paused, kills, stat, offer, hitRects;
   var keys = Object.create(null);
   var shake = 0, flash = 0;
+  // banish_animation (view.cc:469): cells wink out with rising probability and
+  // the animation extends itself until nothing is left. The one primitive this
+  // game had no use for until now.
+  var banish = null;
 
   function statsOf() {
     var s = { move:1, hp:0, pick:8, haste:1 };
@@ -422,6 +426,8 @@
 
     for (var f = 0; f < foes.length; f++) {
       var m = foes[f];
+      // still condensing: show only some frames, which is the dissolve reversed
+      if (m.fade > 0 && Math.random() < m.fade) continue;
       var px = (toCellX(m.x) | 0) - F.x, py = (toCellY(m.y) | 0) - F.y;
       if (px < 0 || py < 0 || px >= F.w || py >= F.h) continue;
       var id = py * F.w + px;
@@ -446,6 +452,15 @@
     unclip();
   }
 
+  // The slope of a world-space direction, judged in cell space because the
+  // cell is twice as tall as it is wide.
+  function edgeGlyph(dx, dy) {
+    var cy = dy / YS;
+    if (Math.abs(dx) > Math.abs(cy) * 2.2) return "-";
+    if (Math.abs(cy) > Math.abs(dx) * 2.2) return "|";
+    return (dx > 0) === (cy > 0) ? "\\" : "/";
+  }
+
   function stampFX() {
     for (var i = 0; i < fx.length; i++) {
       var e = fx[i], p = 1 - e.life / e.max, j;
@@ -459,6 +474,26 @@
           putFX(toCellX(e.x0) + (toCellX(e.x1) - toCellX(e.x0)) * j / n,
               toCellY(e.y0) + (toCellY(e.y1) - toCellY(e.y0)) * j / n, GI[e.g], e.c);
         }
+      } else if (e.k === "arc") {
+        // A lash travelling through an angle: the arc it has already covered
+        // stays behind it, the way bolt::draw deliberately does not clean up,
+        // and the lash itself is drawn straight out at the angle it is on now.
+        var span = e.a1 - e.a0, cur = e.a0 + span * p;
+        var steps = Math.max(8, Math.round(Math.abs(span) * e.r));
+        for (j = 0; j <= steps; j++) {
+          var an = e.a0 + span * (j / steps);
+          if ((span > 0 && an > cur) || (span < 0 && an < cur)) break;
+          putFXHalf(toCellX(e.x + Math.cos(an) * e.r),
+                    toCellY(e.y + Math.sin(an) * e.r), e.c);
+        }
+        var n3 = Math.max(2, Math.round(e.r));
+        for (j = 1; j <= n3; j++) {
+          var rr3 = e.r * j / n3;
+          putFX(toCellX(e.x + Math.cos(cur) * rr3),
+                toCellY(e.y + Math.sin(cur) * rr3),
+                GI[edgeGlyph(Math.cos(cur), Math.sin(cur))], e.c);
+        }
+
       } else if (e.k === "ring") {
         var rr = e.r * p;
         for (j = 0; j < 44; j++) {
@@ -561,9 +596,13 @@
     fxN.fill(0);
     fxH.fill(0);
     drawField();
+    if (banish)
+      for (var bi2 = 0; bi2 < banish.mask.length; bi2++)
+        if (banish.mask[bi2])
+          put(bi2 % cols, (bi2 / cols) | 0, 0, 0, Z.NUM);
     drawShell();
     if (paused && offer) drawLevelUp();
-    if (over_) drawOver();
+    if (over_ && (!banish || banish.done)) drawOver();
 
     var ox = 0, oy = 0;
     if (shake > 0) { ox = ri(3) - 1; oy = ri(3) - 1; }
@@ -603,13 +642,20 @@
     var w = Math.max(5, Math.round(r * 2));
     var h = Math.max(4, Math.round(r / YS) + 4);
     var heat = new Uint8Array(w * h);
-    // seed the bottom row across the width of the blast
-    for (var x = 0; x < w; x++) heat[(h - 1) * w + x] = FIRE_MAX;
+    // The source is a disc, not a rectangle: heat falls off from the middle of
+    // the blast, so the base is round and ragged rather than a straight edge.
+    var seed = new Uint8Array(w);
+    for (var x = 0; x < w; x++) {
+      var off = Math.abs(x - (w - 1) / 2) / ((w - 1) / 2 || 1);
+      seed[x] = Math.max(0, Math.round(FIRE_MAX * (1 - off * off * 0.85)));
+      heat[(h - 1) * w + x] = seed[x];
+    }
     // wx0 is the left edge and wy0 the world row the SOURCE sits on, a little
     // below the blast centre so the flame rises through it. Every row above is
     // one cell height higher, which is YS world units.
-    fires.push({ wx: wx - w / 2, wy: wy + r * 0.5,
-                 w: w, h: h, heat: heat, acc: 0, fuel: 2.2, dmg: dmg * 0.22 });
+    fires.push({ wx: wx - w / 2, wy: wy + r * 0.5, seed: seed,
+                 w: w, h: h, heat: heat, acc: 0, fuel: 2.2, dmg: dmg * 0.22,
+                 wind: 0, phase: rnd(6.3) });
     if (fires.length > 8) fires.shift();
   }
 
@@ -621,16 +667,24 @@
         var v = heat[src];
         if (!v) continue;
         var rand = Math.round(Math.random() * 3) & 3;
-        var dx = rand - 1;
-        var nx = x + dx;
+        // the drift term leans the column the way the draught is going
+        var nx = x + Math.round(rand - 1 + f.wind);
         if (nx < 0 || nx >= w) nx = x;
         heat[(y - 1) * w + nx] = Math.max(0, v - (rand & 1));
       }
     }
-    // the bottom row cools once the fuel is gone, and the fire dies upward
-    if (f.fuel <= 0)
+    if (f.fuel > 0) {
+      // the source flickers, so the flame is never the same shape twice
+      for (var j = 0; j < w; j++) {
+        if (!f.seed[j]) continue;
+        heat[(f.h - 1) * w + j] =
+          Math.max(0, Math.min(FIRE_MAX, f.seed[j] + ri(5) - 2));
+      }
+    } else {
+      // fuel gone: the base cools and the fire dies upward
       for (var k = 0; k < w; k++)
         heat[(f.h - 1) * w + k] = Math.max(0, heat[(f.h - 1) * w + k] - 1);
+    }
   }
 
   function stepFires(dt) {
@@ -638,6 +692,7 @@
       var f = fires[i];
       f.fuel -= dt;
       f.acc += dt;
+      f.wind = Math.sin(t * 0.55 + f.phase) * 0.85;
       var burned = false;
       while (f.acc >= 1 / 20) { f.acc -= 1 / 20; spreadFire(f); burned = true; }
       if (!burned) continue;
@@ -729,12 +784,19 @@
     a.t = p.cd * s.haste;
 
     if (a.def.id === "whip") {
-      [1, -1].forEach(function (dir) {
-        fx.push({ k:"line", x0:you.x, y0:you.y, x1:you.x + dir * p.len, y1:you.y,
-                  g:"~", c:C.us, life:0.2, max:0.2 });
-        foesIn(you.x + dir * p.len / 2, you.y, p.len / 2 + 1.5).forEach(function (m) {
-          if ((m.x - you.x) * dir > -1) hurtFoe(m, p.dmg, C.us);
+      var SWEEP = 2.5;                       // radians the lash travels
+      [0, Math.PI].forEach(function (mid) {
+        var a0 = mid - SWEEP / 2, a1 = mid + SWEEP / 2;
+        // Everything the arc will pass, with how far into the sweep it is
+        // hit -- so the front of the swing lands first.
+        var pend = [];
+        foesIn(you.x, you.y, p.len + 1.5).forEach(function (m) {
+          var an = Math.atan2(m.y - you.y, m.x - you.x) - a0;
+          while (an < 0) an += Math.PI * 2;
+          if (an <= SWEEP) pend.push({ m: m, at: an / SWEEP });
         });
+        fx.push({ k:"arc", x:you.x, y:you.y, r:p.len, a0:a0, a1:a1,
+                  c:C.us, life:0.22, max:0.22, dmg:p.dmg, pend:pend });
       });
 
     } else if (a.def.id === "knives") {
@@ -801,7 +863,8 @@
       var def = pool[ri(pool.length)];
       var an = rnd(Math.PI * 2), rad = F.w * 0.62;
       foes.push({ def:def, x:you.x + Math.cos(an) * rad, y:you.y + Math.sin(an) * rad * 0.9,
-                  hp:def.hp * (1 + minute * 0.62), hurt:0, dead:false, ph:rnd(6.3) });
+                  hp:def.hp * (1 + minute * 0.62), hurt:0, dead:false, ph:rnd(6.3),
+                  fade:1 });
     }
   }
 
@@ -833,6 +896,7 @@
       var m = foes[i];
       if (m.dead) continue;
       m.hurt -= dt;
+      if (m.fade > 0) m.fade = Math.max(0, m.fade - dt * 2.2);
       var dx = you.x - m.x, dy = you.y - m.y, d = Math.hypot(dx, dy) || 1;
       var wob = m.def.weave ? Math.sin(t * 5 + m.ph) * 0.55 : 0;
       m.x += (dx / d + (-dy / d) * wob) * m.def.sp * dt;
@@ -864,8 +928,18 @@
     stepFires(dt);
 
     for (var e = fx.length - 1; e >= 0; e--) {
-      fx[e].life -= dt;
-      if (fx[e].life <= 0) fx.splice(e, 1);
+      var ef = fx[e];
+      ef.life -= dt;
+      if (ef.pend && ef.pend.length) {
+        var done = 1 - ef.life / ef.max;
+        for (var q = ef.pend.length - 1; q >= 0; q--) {
+          if (ef.pend[q].at > done) continue;
+          var victim = ef.pend[q].m;
+          ef.pend.splice(q, 1);
+          if (!victim.dead) hurtFoe(victim, ef.dmg, ef.c, ef.x, ef.y);
+        }
+      }
+      if (ef.life <= 0) fx.splice(e, 1);
     }
     if (t >= RUN_LENGTH) finish(true);
   }
@@ -916,6 +990,8 @@
     over_ = won ? "won" : "lost";
     paused = true;
     forceFull = true;
+    if (!won) banish = { mask: new Uint8Array(cols * rows), frame: 0, acc: 0,
+                         done: false };
     say(won ? "You survived. " + kills + " put down."
             : "You died at " + mmss(t) + ". " + kills + " put down.");
   }
@@ -967,6 +1043,22 @@
     var dt = Math.min(0.05, (now - last) / 1000 || 0);
     last = now;
     if (!paused && !over_) step(dt);
+    if (banish && !banish.done) {
+      banish.acc += dt;
+      while (banish.acc >= 0.07) {
+        banish.acc -= 0.07;
+        var left = false;
+        for (var by = F.y; by < F.y + F.h; by++)
+          for (var bx = F.x; bx < F.x + F.w; bx++) {
+            var bi = by * cols + bx;
+            if (banish.mask[bi]) continue;
+            if (ri(Math.max(1, 10 - banish.frame)) === 0) banish.mask[bi] = 1;
+            else left = true;
+          }
+        banish.frame++;
+        if (!left || banish.frame >= 10) { banish.done = true; break; }
+      }
+    }
     render();
     requestAnimationFrame(frame);
   }
@@ -974,7 +1066,7 @@
   function start() {
     over_ = null; paused = false; t = 0; kills = 0;
     foes = []; gems = []; fx = []; fires = []; offer = null; hitRects = null;
-    shake = 0; flash = 0;
+    shake = 0; flash = 0; banish = null;
     stat = { dirty:0, ms:0 };
     you = { x:0, y:0, hp:100, maxhp:100, lv:1, xp:0, need:5,
             arms:[], iframe:0, spawnAcc:0 };
