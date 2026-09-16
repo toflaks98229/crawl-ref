@@ -1,0 +1,515 @@
+<title>Looking Straight Down</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap">
+<style>
+  /* Companion to the side-view study, so it keeps that page's terminal.
+     Committed single theme; it paints its own ground. */
+  :root {
+    --ground:  #0a0907;
+    --panel:   #14120f;
+    --panel-2: #1b1813;
+    --line:    #2b261f;
+    --line-lit:#413a2f;
+    --ink:     #ccc4b4;
+    --dim:     #8a8071;
+    --faint:   #57503f;
+    --accent:  #55ffff;
+    --warn:    #ffc14d;
+    --bad:     #ff6b5e;
+
+    /* the cell, from CLAUDE.md: 1 wide, 2 tall */
+    --cell-w: 15px;
+    --cell-ratio: 2;
+    --cell-h: calc(var(--cell-w) * var(--cell-ratio));
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  }
+  .wrap {
+    max-width: 1000px; margin: 0 auto;
+    padding-inline: 20px; padding-block: 30px 56px;
+    display: flex; flex-direction: column; gap: 30px;
+  }
+  h1 {
+    font-family: var(--cond); font-weight: 700;
+    font-size: clamp(28px, 5.5vw, 42px); line-height: 1;
+    margin: 0; text-wrap: balance;
+  }
+  .eyebrow {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+  }
+  .lede { margin: 0; max-width: 66ch; color: var(--dim); }
+  .lede b { color: var(--ink); font-weight: 400; }
+  .lede code { color: var(--accent); font-size: 12px; }
+  h2 {
+    font-family: var(--cond); font-weight: 700; font-size: 11px;
+    letter-spacing: .15em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 12px;
+  }
+  section { display: flex; flex-direction: column; }
+
+  /* ---------------- the cell grid ---------------- */
+  .fig { display: grid; grid-auto-rows: var(--cell-h);
+         background: #050403; width: max-content; }
+  .cl { width: var(--cell-w); height: var(--cell-h);
+        overflow: hidden; display: block; }
+  .cl > .g {
+    display: block; width: 100%;
+    font-size: calc(var(--cell-h) * .74); line-height: var(--cell-h);
+    text-align: center; white-space: pre; transform-origin: 50% 50%;
+  }
+  .cl.body > .g { color: #ccc4b4; }
+  .cl.lead > .g { color: var(--accent); }
+  .cl.floor > .g { color: #3b352b; }
+
+  /* ---------------- proportion strip ---------------- */
+  .props { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; }
+  .prop { display: flex; flex-direction: column; gap: 7px; align-items: center; }
+  .prop .sz { font-family: var(--cond); font-weight: 700; font-size: 13px; }
+  .prop .px { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .prop .vd { font-size: 10.5px; text-align: center; max-width: 15ch; line-height: 1.35; }
+  .prop.good .sz, .prop.good .vd { color: var(--accent); }
+  .prop.bad .vd { color: var(--bad); }
+  .prop.meh .vd { color: var(--warn); }
+
+  /* ---------------- specimens ---------------- */
+  .rack {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .spec {
+    background: var(--panel); padding: 14px 12px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 9px;
+    cursor: pointer; border: 0; font: inherit; color: inherit; text-align: center;
+  }
+  .spec:hover { background: var(--panel-2); }
+  .spec[aria-pressed="true"] { background: #101d1d; }
+  .spec[aria-pressed="true"] .nm { color: var(--accent); }
+  .spec:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .spec .nm { font-family: var(--cond); font-weight: 700; font-size: 14px;
+              letter-spacing: .04em; }
+  .spec .rd { color: var(--faint); font-size: 10.5px; line-height: 1.35; }
+
+  /* ---------------- facing rose ---------------- */
+  .rose {
+    display: grid; grid-template-columns: repeat(3, auto);
+    gap: 16px; width: max-content; align-items: center; justify-items: center;
+  }
+  .rose .slot { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .rose .lb { font-family: var(--cond); font-weight: 700; font-size: 10px;
+              letter-spacing: .12em; color: var(--faint); }
+  .rose .hub { color: var(--faint); font-size: 10.5px; text-align: center;
+               max-width: 15ch; line-height: 1.35; }
+
+  /* ---------------- controls + facts ---------------- */
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button.ui {
+    font: inherit; font-size: 11px; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 2px; padding: 5px 10px; cursor: pointer;
+  }
+  button.ui:hover { border-color: var(--line-lit); }
+  button.ui[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button.ui:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .phase { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .facts {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(212px, 1fr));
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .facts div { background: var(--panel); padding: 11px 13px;
+               display: flex; flex-direction: column; gap: 3px; }
+  .facts dt { color: var(--faint); font-size: 10px; letter-spacing: .13em;
+              text-transform: uppercase; font-family: var(--cond); font-weight: 700; }
+  .facts dd { margin: 0; font-size: 12.5px; }
+  .facts dd b { color: var(--accent); font-weight: 400; }
+
+  .notes { margin: 0; padding-left: 1.1em; color: var(--dim); max-width: 74ch; }
+  .notes li { margin-bottom: 7px; }
+  .notes b { color: var(--ink); font-weight: 400; }
+  .notes code { color: var(--accent); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:11px">
+    <div class="eyebrow">Sprite study &middot; the overhead view</div>
+    <h1>Looking Straight Down</h1>
+    <p class="lede">
+      From above, a person is round: shoulders across are about as wide as the
+      body is deep. The cell is <b>1 wide and 2 tall</b>, so a round footprint
+      needs <b>more columns than rows</b> &mdash; the 3&times;3 block of the
+      side-view study is a standing shape, and used overhead it reads as a body
+      lying down. The other half of the problem is that the figure now has to
+      point somewhere, and Crawl has <b>no facing at all</b>: neither
+      <code>player.h</code> nor <code>monster.h</code> carries one.
+    </p>
+  </header>
+
+  <section>
+    <h2>Which block is a person seen from above?</h2>
+    <div class="props" id="props"></div>
+  </section>
+
+  <section>
+    <h2>Specimens &mdash; 5 &times; 3, facing north</h2>
+    <div class="bar" style="margin-bottom:14px">
+      <button class="ui" id="play" aria-pressed="true">&#9208; Pause</button>
+      <button class="ui" id="sl" aria-pressed="false">Slow</button>
+      <button class="ui" id="step">Step &rsaquo;</button>
+      <span class="phase" id="phase"></span>
+    </div>
+    <div class="rack" id="rack"></div>
+  </section>
+
+  <section>
+    <h2>Every facing is separate art</h2>
+    <div class="rose" id="rose"></div>
+  </section>
+
+  <section>
+    <h2>What it costs</h2>
+    <dl class="facts" id="facts"></dl>
+  </section>
+
+  <section>
+    <h2>Consequences</h2>
+    <ul class="notes">
+      <li><b>Facing is state the rules do not have.</b> Searching
+      <code>player.h</code>, <code>actor.h</code> and <code>monster.h</code> for
+      a facing finds nothing; a monster carries a <code>target</code>
+      coordinate, not an orientation. Derive the sprite's heading from the last
+      move &mdash; <code>delve.html</code> already keeps
+      <code>you.lastDir</code> &mdash; and never let it feed back into a roll.
+      The moment facing changes a to-hit, it is a different game.</li>
+      <li><b>You cannot rotate ASCII on this grid.</b> Turning a 5&times;3 block
+      a quarter turn gives 3&times;5, which in pixels is 45&times;150 instead of
+      75&times;90 &mdash; a different creature, not the same one facing east. So
+      north and east are drawn separately, and the glyphs turn too:
+      <code>/</code> becomes <code>\</code>, <code>|</code> becomes
+      <code>-</code>.</li>
+      <li><b>Overhead hides the walk.</b> From above the legs are under the
+      body, so the stride has to be told with the arms and with a foot showing
+      past the shoulder line. Two poses per facing carry it; the side view had
+      four to spend.</li>
+      <li><b>The cost is per facing.</b> Four cardinals at two poses is already
+      120 characters a design; adding diagonals doubles it, and every monster
+      you scale up pays the same again.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // One glyph, one cell -- minimal cellgrid.js, so a wide glyph dropped into a
+  // design still occupies exactly one cell.
+  var mctx = document.createElement("canvas").getContext("2d");
+  var fitCache = new Map(), unit = 0, fitReady = false;
+  function useFont(sample) {
+    var cs = getComputedStyle(sample);
+    mctx.font = cs.fontSize + " " + cs.fontFamily;
+    unit = mctx.measureText("M").width || 1;
+    fitCache.clear();
+    fitReady = true;
+  }
+  function paint(span, ch) {
+    span.textContent = ch;
+    if (!fitReady || ch === " ") { span.style.transform = ""; return; }
+    var s = fitCache.get(ch);
+    if (s === undefined) {
+      var w = mctx.measureText(ch).width;
+      s = w > unit * 1.02 ? unit / w : 1;
+      fitCache.set(ch, s);
+    }
+    span.style.transform = s === 1 ? "" : "scaleX(" + s.toFixed(4) + ")";
+  }
+
+  var CELL_W = 15, CELL_H = 30;
+
+  // =========================================================================
+  // Specimens. Each facing is authored separately -- a quarter turn changes
+  // the block's proportion on a non-square grid, so rotation is not available.
+  // Two poses per facing: the stride is told by the arms and by a foot
+  // showing past the shoulder line, because from above the legs are hidden.
+  // =========================================================================
+  var SPECS = [
+    { id: "compass", name: "Compass", w: 5, h: 3,
+      read: "head, shoulders, one lead mark. The cheapest thing that still points.",
+      f: {
+        N: [["  |  ", " \\o/ ", "  '  "], ["  |  ", " /o\\ ", " '   "]],
+        E: [["  \\  ", " (o)-", "  /  "], ["  /  ", " (o)-", "  \\  "]],
+        S: [["  ,  ", " /o\\ ", "  |  "], ["   , ", " \\o/ ", "  |  "]],
+        W: [["  /  ", "-(o) ", "  \\  "], ["  \\  ", "-(o) ", "  /  "]]
+      } },
+    { id: "pauldron", name: "Pauldron", w: 5, h: 3,
+      read: "a shoulder bar that turns with you. Reads as armour from above.",
+      f: {
+        N: [["  |  ", "[=o=]", "  '  "], ["  |  ", "[=o=]", " '   "]],
+        E: [["  [  ", "  o==", "  ]  "], ["  [  ", " .o==", "  ]  "]],
+        S: [["  '  ", "[=o=]", "  |  "], [" '   ", "[=o=]", "  |  "]],
+        W: [["  [  ", "==o  ", "  ]  "], ["  [  ", "==o. ", "  ]  "]]
+      } },
+    { id: "cloak", name: "Cloak", w: 5, h: 3,
+      read: "no limbs at all. The hem behind you does the whole walk.",
+      f: {
+        N: [["  ^  ", " (o) ", " \\_/ "], ["  ^  ", " (o) ", "  v  "]],
+        E: [["  \\  ", " (o)>", "  /  "], ["   \\ ", " (o)>", "   / "]],
+        S: [[" _^_ ", " (o) ", "  v  "], ["  ^  ", " (o) ", "  v  "]],
+        W: [["  /  ", "<(o) ", "  \\  "], [" /   ", "<(o) ", " \\   "]]
+      } },
+    { id: "hunter", name: "Hunter", w: 5, h: 3,
+      read: "the weapon is the facing. Swap the lead glyph per weapon.",
+      f: {
+        N: [["  )  ", " -o- ", "  '  "], ["  )  ", " -o- ", " '   "]],
+        E: [["  '  ", "  o-)", "  .  "], ["  .  ", "  o-)", "  '  "]],
+        S: [["  '  ", " -o- ", "  (  "], [" '   ", " -o- ", "  (  "]],
+        W: [["  '  ", "(-o  ", "  .  "], ["  .  ", "(-o  ", "  '  "]]
+      } },
+    { id: "beast", name: "Beast", w: 5, h: 3,
+      read: "four legs, long axis along the facing. Not a humanoid shape.",
+      f: {
+        N: [["  ^  ", " /#\\ ", " ' ' "], ["  ^  ", " \\#/ ", " ' ' "]],
+        E: [[" ,-- ", " (#)>", " '-- "], [" '-- ", " (#)>", " ,-- "]],
+        S: [[" ' ' ", " \\#/ ", "  v  "], [" ' ' ", " /#\\ ", "  v  "]],
+        W: [[" --, ", "<(#) ", " --' "], [" --' ", "<(#) ", " --, "]]
+      } },
+    { id: "compact", name: "Compact", w: 3, h: 2,
+      read: "the minimum that still has a heading. Nearly square in pixels.",
+      f: {
+        N: [[" | ", "\\o/"], [" | ", "/o\\"]],
+        E: [[" \\ ", "(o>"], [" / ", "(o>"]],
+        S: [["\\o/", " | "], ["/o\\", " | "]],
+        W: [[" / ", "<o)"], [" \\ ", "<o)"]]
+      } }
+  ];
+
+  var FACINGS = ["N", "E", "S", "W"];
+  var pick = 0, phase = 0, playing = true, slow = false;
+
+  // =========================================================================
+  // Drawing
+  // =========================================================================
+  function makeFig(w, h) {
+    var el = document.createElement("div");
+    el.className = "fig";
+    el.style.gridTemplateColumns = "repeat(" + w + ", var(--cell-w))";
+    var cells = [];
+    for (var i = 0; i < w * h; i++) {
+      var c = document.createElement("span");
+      c.className = "cl";
+      var g = document.createElement("span");
+      g.className = "g";
+      c.appendChild(g);
+      el.appendChild(c);
+      cells.push({ cell: c, g: g });
+    }
+    return { el: el, cells: cells, w: w, h: h };
+  }
+  // The lead glyph -- the one that says which way this thing is pointing --
+  // is picked out so the heading reads at a glance.
+  var LEAD = "|-^v<>)(=";
+  function drawFig(fig, rows) {
+    for (var y = 0; y < fig.h; y++) for (var x = 0; x < fig.w; x++) {
+      var ch = (rows[y] || "").charAt(x) || " ";
+      var o = fig.cells[y * fig.w + x];
+      paint(o.g, ch);
+      o.cell.className = "cl " + (ch === " " ? ""
+        : LEAD.indexOf(ch) >= 0 ? "lead" : "body");
+    }
+  }
+
+  // ---- proportion strip ---------------------------------------------------
+  var PROPS = [
+    { w: 3, h: 3, cls: "bad",  vd: "twice as tall as wide. A standing figure, not an overhead one.",
+      rows: [" | ", "\\o/", " ' "] },
+    { w: 3, h: 2, cls: "good", vd: "close to square. The smallest honest footprint.",
+      rows: [" | ", "\\o/"] },
+    { w: 5, h: 3, cls: "good", vd: "near square, with room for shoulders and a lead.",
+      rows: ["  |  ", " \\o/ ", "  '  "] },
+    { w: 5, h: 2, cls: "meh",  vd: "wider than deep. Reads as something squat.",
+      rows: ["  |  ", " \\o/ "] }
+  ];
+  function buildProps() {
+    var box = document.getElementById("props");
+    box.innerHTML = "";
+    PROPS.forEach(function (p) {
+      var d = document.createElement("div");
+      d.className = "prop " + p.cls;
+      var fig = makeFig(p.w, p.h);
+      drawFig(fig, p.rows);
+      var sz = document.createElement("span");
+      sz.className = "sz";
+      sz.textContent = p.w + " \u00d7 " + p.h + " cells";
+      var px = document.createElement("span");
+      px.className = "px";
+      var pw = p.w * CELL_W, ph = p.h * CELL_H;
+      px.textContent = pw + " \u00d7 " + ph + " px \u00b7 " + (pw / ph).toFixed(2) + ":1";
+      var vd = document.createElement("span");
+      vd.className = "vd";
+      vd.textContent = p.vd;
+      d.appendChild(fig.el); d.appendChild(sz); d.appendChild(px); d.appendChild(vd);
+      box.appendChild(d);
+    });
+  }
+
+  // ---- specimen rack ------------------------------------------------------
+  var rackFigs = [];
+  function buildRack() {
+    var rack = document.getElementById("rack");
+    rack.innerHTML = "";
+    rackFigs = [];
+    SPECS.forEach(function (s, i) {
+      var b = document.createElement("button");
+      b.className = "spec";
+      b.setAttribute("aria-pressed", String(i === pick));
+      var fig = makeFig(s.w, s.h);
+      b.appendChild(fig.el);
+      var nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = s.name + "  " + s.w + "\u00d7" + s.h;
+      var rd = document.createElement("span");
+      rd.className = "rd";
+      rd.textContent = s.read;
+      b.appendChild(nm); b.appendChild(rd);
+      b.addEventListener("click", function () {
+        pick = i; b.blur(); buildRack(); buildRose(); buildFacts(); tick();
+      });
+      rack.appendChild(b);
+      rackFigs.push(fig);
+    });
+  }
+
+  // ---- facing rose --------------------------------------------------------
+  var roseFigs = [];
+  function buildRose() {
+    var box = document.getElementById("rose");
+    var s = SPECS[pick];
+    box.innerHTML = "";
+    roseFigs = [];
+    // north on top, west and east either side of a note, south beneath
+    var layout = [
+      [null, "N", null],
+      ["W", "hub", "E"],
+      [null, "S", null]
+    ];
+    layout.forEach(function (row) {
+      row.forEach(function (slot) {
+        var cellEl = document.createElement("div");
+        if (slot === null) { box.appendChild(cellEl); return; }
+        if (slot === "hub") {
+          cellEl.className = "hub";
+          cellEl.innerHTML = s.name + "<br>" + s.w + "\u00d7" + s.h
+            + "<br>4 facings<br>2 poses each";
+          box.appendChild(cellEl);
+          return;
+        }
+        cellEl.className = "slot";
+        var fig = makeFig(s.w, s.h);
+        var lb = document.createElement("span");
+        lb.className = "lb";
+        lb.textContent = slot;
+        cellEl.appendChild(fig.el);
+        cellEl.appendChild(lb);
+        box.appendChild(cellEl);
+        roseFigs.push({ fig: fig, face: slot });
+      });
+    });
+  }
+
+  // ---- facts --------------------------------------------------------------
+  function buildFacts() {
+    var s = SPECS[pick];
+    var cells = s.w * s.h;
+    var el = document.getElementById("facts");
+    el.innerHTML = [
+      ["Block", s.w + " &times; " + s.h + " cells = <b>" + (s.w * CELL_W)
+        + " &times; " + (s.h * CELL_H) + " px</b> at this page's 15px cell "
+        + "(" + (s.w * 11) + "&times;" + (s.h * 22) + " at the game's)"],
+      ["Footprint", "<b>" + ((s.w * CELL_W) / (s.h * CELL_H)).toFixed(2)
+        + ":1</b> &mdash; 1.00 would be a perfect circle from above"],
+      ["Four cardinals", cells + " cells &times; 4 facings &times; 2 poses = <b>"
+        + (cells * 8) + "</b> characters"],
+      ["With diagonals", "eight facings doubles it to <b>" + (cells * 16)
+        + "</b> characters"],
+      ["Side view, for comparison", "9 cells &times; 4 poses = <b>36</b>, "
+        + "because a side view needs only one facing"],
+      ["Facings in Crawl", "<b>none</b>. Derive it from the last move and keep "
+        + "it out of every roll"],
+      ["Rotation", "<b>unavailable</b>. A quarter turn swaps the block's "
+        + "columns and rows, which changes its proportion on a 1:2 grid"],
+      ["Poses per facing", "<b>2</b>. Overhead hides the legs, so there is less "
+        + "stride to show than a side view has"]
+    ].map(function (r) {
+      return "<div><dt>" + r[0] + "</dt><dd>" + r[1] + "</dd></div>";
+    }).join("");
+  }
+
+  // =========================================================================
+  // Loop
+  // =========================================================================
+  function tick() {
+    rackFigs.forEach(function (fig, i) {
+      var s = SPECS[i];
+      drawFig(fig, s.f.N[phase % 2]);
+    });
+    var sel = SPECS[pick];
+    roseFigs.forEach(function (o) {
+      drawFig(o.fig, sel.f[o.face][phase % 2]);
+    });
+    document.getElementById("phase").textContent =
+      "pose " + ((phase % 2) + 1) + " of 2  \u00b7  energy "
+      + (70 + (phase % 2) * 5).toFixed(1) + " / 80";
+  }
+
+  var last = 0, acc = 0;
+  function loop(now) {
+    var dt = (now - last) / 1000 || 0;
+    last = now;
+    if (playing) {
+      acc += dt;
+      var stepLen = slow ? 0.55 : 0.22;
+      while (acc >= stepLen) { acc -= stepLen; phase++; tick(); }
+    }
+    requestAnimationFrame(loop);
+  }
+
+  document.getElementById("play").addEventListener("click", function () {
+    playing = !playing;
+    this.setAttribute("aria-pressed", String(playing));
+    this.innerHTML = playing ? "\u23F8 Pause" : "\u25B6 Play";
+    this.blur();
+  });
+  document.getElementById("sl").addEventListener("click", function () {
+    slow = !slow;
+    this.setAttribute("aria-pressed", String(slow));
+    this.blur();
+  });
+  document.getElementById("step").addEventListener("click", function () {
+    playing = false;
+    var pb = document.getElementById("play");
+    pb.setAttribute("aria-pressed", "false");
+    pb.innerHTML = "\u25B6 Play";
+    phase++; tick(); this.blur();
+  });
+
+  buildProps(); buildRack(); buildRose(); buildFacts();
+  useFont(document.querySelector(".cl > .g"));
+  buildProps(); tick();
+  if (document.fonts && document.fonts.ready)
+    document.fonts.ready.then(function () {
+      useFont(document.querySelector(".cl > .g"));
+      buildProps(); tick();
+    });
+  requestAnimationFrame(function (n) { last = n; requestAnimationFrame(loop); });
+})();
+</script>
